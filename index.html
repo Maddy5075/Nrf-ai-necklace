@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Necklace Assistant</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
+        .container { max-width: 500px; margin: auto; background: #2d2d2d; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        input[type="text"], input[type="range"] { width: 100%; margin: 15px 0; }
+        button { background: #00e676; border: none; padding: 15px 30px; border-radius: 25px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.3s; }
+        button:hover { background: #00c853; transform: scale(1.05); }
+        .status { margin-top: 20px; color: #bbb; font-style: italic; }
+        .volume-label { display: flex; justify-content: space-between; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>AI Necklace Assistant</h2>
+    
+    <input type="text" id="apiKey" placeholder="Paste Gemini API Key Here">
+    
+    <button id="connectBtn" onclick="initSystem()">Connect & Talk</button>
+    
+    <div style="margin-top: 30px;">
+        <div class="volume-label">
+            <span>Speaker Volume</span>
+            <span id="volValue">50%</span>
+        </div>
+        <input type="range" id="volSlider" min="0" max="100" value="50" oninput="updateVolume(this.value)">
+    </div>
+
+    <p id="status" class="status">Status: Disconnected</p>
+</div>
+
+<script>
+    // UUIDs from your firmware
+    const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
+    const MIC_CHAR_UUID = "12345679-1234-5678-1234-56789abcdef0";
+    const VOL_CHAR_UUID = "1234567a-1234-5678-1234-56789abcdef0";
+    const SPK_CHAR_UUID = "1234567b-1234-5678-1234-56789abcdef0";
+
+    let socket, spkChar, volChar;
+
+    async function initSystem() {
+        const API_KEY = document.getElementById('apiKey').value;
+        if (!API_KEY) { alert("Please enter your API Key"); return; }
+
+        try {
+            document.getElementById('status').innerText = "Status: Searching for BLE device...";
+            
+            // 1. Connect BLE
+            const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(SERVICE_UUID);
+            
+            const micChar = await service.getCharacteristic(MIC_CHAR_UUID);
+            spkChar = await service.getCharacteristic(SPK_CHAR_UUID);
+            volChar = await service.getCharacteristic(VOL_CHAR_UUID);
+
+            // 2. Connect Gemini WebSocket
+            const url = `wss://://googleapis.com{API_KEY}`;
+            socket = new WebSocket(url);
+
+            socket.onopen = () => {
+                document.getElementById('status').innerText = "Status: AI Connected! Speak into your necklace.";
+                socket.send(JSON.stringify({ setup: { model: "models/gemini-2.0-flash-exp" } }));
+            };
+
+            socket.onmessage = async (event) => {
+                const response = JSON.parse(event.data);
+                if (response.serverContent?.modelTurn?.parts?.[0]?.inlineData) {
+                    const base64Audio = response.serverContent.modelTurn.parts[0].inlineData.data;
+                    await sendToSpeaker(base64Audio);
+                }
+            };
+
+            // 3. Handle Mic Audio (From Device -> AI)
+            micChar.addEventListener('characteristicvaluechanged', (event) => {
+                const value = event.target.value;
+                const audioPayload = new Uint8Array(value.buffer).slice(7); // Strip 7-byte header
+                const base64Payload = btoa(String.fromCharCode(...audioPayload));
+
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        realtimeInput: { mediaChunks: [{ data: base64Payload, mimeType: "audio/pcm;rate=16000" }] }
+                    }));
+                }
+            });
+
+            await micChar.startNotifications();
+        } catch (e) {
+            document.getElementById('status').innerText = "Error: " + e.message;
+            console.error(e);
+        }
+    }
+
+    // Update Volume (From Web -> Device)
+    async function updateVolume(val) {
+        document.getElementById('volValue').innerText = val + "%";
+        if (volChar) {
+            try {
+                const volumeByte = new Uint8Array([parseInt(val)]);
+                await volChar.writeValueWithoutResponse(volumeByte);
+            } catch (e) { console.error("Volume write failed", e); }
+        }
+    }
+
+    // Send AI Voice (From AI -> Device)
+    async function sendToSpeaker(base64Data) {
+        const binaryString = atob(base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+
+        const CHUNK_SIZE = 200; // Fits your MTU
+        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+            const chunk = bytes.slice(i, i + CHUNK_SIZE);
+            await spkChar.writeValueWithoutResponse(chunk);
+        }
+    }
+</script>
+
+</body>
+</html>
