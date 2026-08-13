@@ -1,166 +1,1010 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Necklace Assistant</title>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
-        .container { max-width: 500px; margin: auto; background: #2d2d2d; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        input[type="text"], input[type="range"] { width: 100%; margin: 15px 0; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #222; color: #fff; box-sizing: border-box; }
-        button { background: #00e676; border: none; padding: 15px 30px; border-radius: 25px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.3s; }
-        button:hover { background: #00c853; transform: scale(1.05); }
-        .status { margin-top: 20px; color: #bbb; font-style: italic; }
-        .volume-label { display: flex; justify-content: space-between; margin-top: 10px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#111417">
+<title>AI Necklace Bench Console</title>
+<style>
+  :root {
+    --bg: #111417;
+    --card: #1b1f24;
+    --card-2: #232830;
+    --line: #2e343d;
+    --fg: #e8ecf1;
+    --dim: #97a1ad;
+    --accent: #00e676;
+    --accent-press: #00b85e;
+    --warn: #ffb020;
+    --err: #ff5c5c;
+    --tap: 48px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 15px/1.45 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    padding: 0 12px calc(28px + env(safe-area-inset-bottom));
+    max-width: 620px; margin: 0 auto;
+    overscroll-behavior-y: contain;
+  }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg); padding: 12px 0 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; margin: 0 0 8px; letter-spacing: .2px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--card-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 12px; font-size: 13px; color: var(--dim);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #5a626d; flex: none; }
+  .dot.on { background: var(--accent); }
+  .dot.busy { background: var(--warn); }
+  .dot.err { background: var(--err); }
+
+  section {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px; margin-top: 12px;
+  }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .9px;
+    color: var(--dim); margin: 0 0 12px; font-weight: 600;
+  }
+
+  button {
+    min-height: var(--tap); width: 100%;
+    background: var(--card-2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px;
+    font-size: 15px; font-weight: 600; font-family: inherit;
+    padding: 12px 14px; cursor: pointer;
+  }
+  button:active:not(:disabled) { background: #2c323b; transform: scale(.99); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--accent); color: #06231a; border-color: transparent; }
+  button.primary:active:not(:disabled) { background: var(--accent-press); }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; min-width: 0; }
+  .stack > * + * { margin-top: 8px; }
+
+  /* Segmented mode switch */
+  .seg { display: flex; background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 4px; gap: 4px; }
+  .seg button { background: transparent; border: none; min-height: 40px; font-size: 14px; color: var(--dim); border-radius: 7px; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #06231a; }
+
+  label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 6px; }
+  .field + .field { margin-top: 14px; }
+  .field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .val { color: var(--fg); font-variant-numeric: tabular-nums; font-weight: 600; }
+  input[type=range] { width: 100%; height: var(--tap); accent-color: var(--accent); background: transparent; }
+  input[type=text], input[type=password], select {
+    width: 100%; min-height: var(--tap);
+    background: var(--card-2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; font-size: 16px; font-family: inherit; /* 16px stops iOS/Android zoom */
+  }
+
+  /* Switch */
+  .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: var(--tap); }
+  .switch input { appearance: none; width: 52px; height: 30px; border-radius: 999px; background: #3a414b; position: relative; flex: none; margin: 0; cursor: pointer; }
+  .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .16s; }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { transform: translateX(22px); }
+  .switch span { font-size: 14px; }
+  .switch small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; }
+
+  /* Stat grid */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
+  .stat { background: var(--card-2); border-radius: 9px; padding: 9px 10px; }
+  .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .stat span { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+
+  .note {
+    background: #1e2530; border: 1px solid #2c3a4d; border-left: 3px solid var(--warn);
+    border-radius: 8px; padding: 11px 12px; font-size: 13px; color: #c6d0dc; margin-top: 10px;
+  }
+  .note.err { border-left-color: var(--err); background: #2a1c1e; border-color: #4a2b2e; }
+  .note b { color: var(--fg); }
+  .note code { background: #0d1013; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  #log {
+    background: #0d1013; border: 1px solid var(--line); border-radius: 9px;
+    padding: 10px; height: 210px; overflow-y: auto;
+    font: 12px/1.5 ui-monospace, "Roboto Mono", Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word; color: #b9c4d0;
+  }
+  #log .t { color: #5f6b78; }
+  #log .e { color: var(--err); }
+  #log .w { color: var(--warn); }
+  #log .g { color: var(--accent); }
+  .hide { display: none !important; }
+</style>
 </head>
 <body>
 
-<div class="container">
-    <h2>AI Necklace Assistant</h2>
-    
-    <input type="text" id="apiKey" placeholder="Paste Gemini API Key Here">
-    
-    <button id="connectBtn" onclick="initSystem()">Connect & Talk</button>
-    
-    <div style="margin-top: 30px;">
-        <div class="volume-label">
-            <span>Speaker Volume</span>
-            <span id="volValue">50%</span>
-        </div>
-        <input type="range" id="volSlider" min="0" max="100" value="50" oninput="updateVolume(this.value)">
-    </div>
+<header>
+  <h1>AI Necklace — Bench Console</h1>
+  <div class="pill"><span class="dot" id="dot"></span><span id="connText">Disconnected</span></div>
+</header>
 
-    <p id="status" class="status">Status: Disconnected</p>
-</div>
+<!-- Shown when the page can't use Web Bluetooth at all -->
+<section id="unsupported" class="hide">
+  <h2>Cannot start</h2>
+  <div class="note err" id="unsupportedMsg"></div>
+</section>
+
+<section id="connectCard">
+  <h2>Connection</h2>
+  <div class="stack">
+    <button id="connectBtn" class="primary">Connect to Necklace</button>
+    <button id="disconnectBtn" disabled>Disconnect</button>
+  </div>
+  <div class="note">
+    Keep this tab in the foreground. Android throttles background timers, which
+    stalls the paced speaker downlink mid-playback.
+  </div>
+</section>
+
+<section id="stateCard" class="hide">
+  <h2>Device State</h2>
+  <div class="stats">
+    <div class="stat"><b id="stState">—</b><span>State</span></div>
+    <div class="stat"><b id="stAck">—</b><span>Cmd Ack</span></div>
+    <div class="stat"><b id="stErr">—</b><span>Last Error</span></div>
+  </div>
+  <div class="note hide" id="stErrNote"></div>
+</section>
+
+<section id="modeCard" class="hide">
+  <h2>Mode</h2>
+  <div class="seg" role="group">
+    <button id="modeLoopback" aria-pressed="true">Loopback</button>
+    <button id="modeAI" aria-pressed="false">AI Assistant</button>
+  </div>
+  <div id="loopbackHelp" class="note">
+    <b>Loopback</b> records your utterance and plays the same LC3 frames back
+    through the necklace speaker. No codec needed — this is the path that works
+    today. Double-tap to start, speak, double-tap to stop.
+  </div>
+  <div id="aiHelp" class="note hide"></div>
+</section>
+
+<section id="aiCard" class="hide">
+  <h2>Gemini</h2>
+  <div class="field">
+    <label for="apiKey">API key</label>
+    <input type="password" id="apiKey" placeholder="Gemini API key" autocomplete="off">
+  </div>
+  <div class="field">
+    <label for="model">Live model</label>
+    <input type="text" id="model" value="gemini-2.0-flash-live-001">
+  </div>
+</section>
+
+<section id="captureCard" class="hide">
+  <h2>Capture</h2>
+  <div class="stats">
+    <div class="stat"><b id="capFrames">0</b><span>Frames</span></div>
+    <div class="stat"><b id="capMs">0.0s</b><span>Duration</span></div>
+    <div class="stat"><b id="capLost">0</b><span>Lost</span></div>
+  </div>
+  <div class="stack" style="margin-top:12px">
+    <button id="replayBtn" disabled>Replay to Speaker</button>
+    <button id="saveBtn" disabled>Download .lc3</button>
+  </div>
+</section>
+
+<section id="controlCard" class="hide">
+  <h2>Controls</h2>
+  <div class="stack">
+    <button id="toneBtn">Play Test Tone (on device)</button>
+    <button id="abortBtn">Abort Capture</button>
+  </div>
+  <div class="switch" style="margin-top:6px">
+    <label for="routeSw" style="margin:0">
+      <span>Remote audio route</span>
+      <small>Answer plays on this phone instead of the necklace speaker</small>
+    </label>
+    <input type="checkbox" id="routeSw">
+  </div>
+</section>
+
+<section id="settingsCard" class="hide">
+  <h2>Settings</h2>
+  <div class="field">
+    <div class="field-head"><label for="volSlider">Speaker volume</label><span class="val" id="volValue">—</span></div>
+    <input type="range" id="volSlider" min="0" max="100" value="70">
+  </div>
+  <div class="field">
+    <div class="field-head"><label for="toSlider">Response timeout</label><span class="val" id="toValue">—</span></div>
+    <input type="range" id="toSlider" min="5000" max="30000" step="1000" value="15000">
+  </div>
+  <div class="field">
+    <label for="micProfile">Mic profile</label>
+    <select id="micProfile">
+      <option value="0">0 — quiet</option>
+      <option value="1">1 — outdoor</option>
+      <option value="2">2 — car</option>
+    </select>
+  </div>
+  <div class="stack" style="margin-top:14px">
+    <button id="applyBtn">Apply Settings</button>
+  </div>
+</section>
+
+<section>
+  <h2>Log</h2>
+  <div id="log"></div>
+  <div class="stack" style="margin-top:10px"><button id="clearLog">Clear</button></div>
+</section>
 
 <script>
-    // UUIDs from your firmware
-    const SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0";
-    const MIC_CHAR_UUID = "12345679-1234-5678-1234-56789abcdef0";
-    const VOL_CHAR_UUID = "1234567a-1234-5678-1234-56789abcdef0";
-    const SPK_CHAR_UUID = "1234567b-1234-5678-1234-56789abcdef0";
+"use strict";
 
-    let socket, spkChar, volChar;
+/* =====================================================================
+ * PROTOCOL — mirrors src/ble.c, include/ble.h, include/ble_settings.h.
+ * scripts/ble_loopback.py is the reference implementation; if this file
+ * and that one ever disagree, that one is right.
+ * ===================================================================== */
 
-    async function initSystem() {
-        const API_KEY = document.getElementById('apiKey').value;
-        if (!API_KEY) { alert("Please enter your API Key"); return; }
+const UUID_SERVICE  = "12345678-1234-5678-1234-56789abcdef0";
+const UUID_MIC      = "12345679-1234-5678-1234-56789abcdef0"; // notify: uplink audio
+const UUID_SPK      = "1234567a-1234-5678-1234-56789abcdef0"; // write-no-rsp: downlink audio
+const UUID_CTL      = "1234567b-1234-5678-1234-56789abcdef0"; // read/write: control byte
+const UUID_SETTINGS = "1234567c-1234-5678-1234-56789abcdef0"; // read/write: 5-byte blob
+const UUID_STATE    = "1234567d-1234-5678-1234-56789abcdef0"; // read/notify: 4-byte state
 
-        try {
-            document.getElementById('status').innerText = "Status: Searching for BLE device...";
-            
-            // 1. Connect BLE
-            const device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
-            const server = await device.gatt.connect();
-            const service = await server.getPrimaryService(SERVICE_UUID);
-            
-            const micChar = await service.getCharacteristic(MIC_CHAR_UUID);
-            spkChar = await service.getCharacteristic(SPK_CHAR_UUID);
-            volChar = await service.getCharacteristic(VOL_CHAR_UUID);
+// struct ble_audio_pkt: seq(u8) ts(u32 LE) len(u16 LE) payload[len]
+const MIC_HEADER_LEN = 7;
+// struct ble_audio_end_meta, appended to the len==0 marker: uid(u16) attempt(u8) count(u16)
+const END_META_LEN = 5;
 
-            document.getElementById('status').innerText = "Status: Connecting to Gemini AI Live...";
+// AUDIO_CODEC_FRAME_BYTES / AUDIO_CODEC_FRAME_US — 32 kbps @ 16 kHz, 10 ms.
+const LC3_FRAME_BYTES = 40;
+const FRAME_MS = 10;
+const SAMPLE_RATE = 16000;
+const BITRATE = 32000;
 
-            // 2. Connect Gemini Multimodal Live WebSocket
-            const host = "generativelanguage.googleapis.com";
-            const path = "google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent";
-            const url = `wss://${host}/ws/${path}?key=${API_KEY}`;
-            
-            socket = new WebSocket(url);
+// Control byte bits. REMOTE_AUDIO is a persistent MODE bit; the other two are
+// COMMAND bits that the firmware consumes and never stores.
+const CTL_REMOTE_AUDIO  = 0x01;
+const CTL_ABORT_CAPTURE = 0x02;
+const CTL_SPEAKER_TEST  = 0x04;
+// ctl_write_cb() does `new_flags = payload[0] & PERSISTENT_MASK`, so ANY write
+// rewrites the route. A command must therefore be OR-ed onto the current route
+// or it silently switches the speaker back on.
+const CTL_PERSISTENT_MASK = CTL_REMOTE_AUDIO;
 
-            socket.onopen = () => {
-                document.getElementById('status').innerText = "Status: AI Connected! Speak into your necklace.";
-                
-                // Formally initiate session setup with specific required configuration fields
-                const setupMessage = {
-                    setup: {
-                        model: "models/gemini-2.0-flash-exp",
-                        generationConfig: {
-                            responseModalities: ["AUDIO"] // Explicitly request voice response back
-                        }
-                    }
-                };
-                socket.send(JSON.stringify(setupMessage));
-            };
+const STATE_NAMES = ["IDLE", "LISTENING", "STREAMING", "DRAINING",
+                     "WAITING_RESPONSE", "PLAYBACK", "SLEEP"];
+const DEVICE_ERRORS = [
+  "NONE", "SPK_FRAMING", "SPK_DECODE", "SPK_PLAYBACK",
+  "SPK_DISCARDED (remote-audio route is ON)", "UPLINK_DISCARDED", "MIC_START",
+];
 
-            socket.onmessage = async (event) => {
-                try {
-                    const response = JSON.parse(event.data);
-                    
-                    // Route parsed audio stream content directly down to speaker characteristics
-                    if (response.serverContent?.modelTurn?.parts?.[0]?.inlineData) {
-                        const base64Audio = response.serverContent.modelTurn.parts[0].inlineData.data;
-                        await sendToSpeaker(base64Audio);
-                    }
-                } catch (err) {
-                    console.error("Failed to parse incoming WS message: ", err);
-                }
-            };
+/* ---- Downlink pacing -------------------------------------------------
+ * Ported from scripts/ble_loopback.py, where these numbers were measured
+ * rather than derived. The pacing discipline matters more than the exact
+ * values: absolute-deadline scheduling, never "sleep batch_ms per pass",
+ * because per-iteration sleep makes each pass cost the period PLUS the work
+ * done in it, so the primed lead erodes and the device's I2S runs dry.
+ *
+ * FRAMES_PER_WRITE is a ceiling. Web Bluetooth does not expose the negotiated
+ * ATT MTU to JS, so we start here and step down on write failure. Chrome on
+ * Android asks for 517 and the firmware announces 498, so 12 frames
+ * (480 B + 3 B ATT) normally fits on the first try.
+ *
+ * PRIME_BATCHES counts BATCHES, not frames — it multiplies with
+ * FRAMES_PER_WRITE. The device ceiling is playback_q (80) + primed I2S blocks
+ * (16) = 96 frames; beyond that audio_play() returns -ENOSPC and DISCARDS,
+ * which is heard as a glitch rather than reported as an underrun.
+ * 7 x 12 = 84 frames of lead, 12 clear of the ceiling.
+ */
+let FRAMES_PER_WRITE = 12;
+const PRIME_BATCHES = 7;
+const PACE_RATE = 0.95;   // run 5% ahead so a lost lead is rebuilt, not permanent
 
-            socket.onerror = (err) => {
-                document.getElementById('status').innerText = "WebSocket Connection Error.";
-                console.error(err);
-            };
+/* ===================== state ===================== */
 
-            socket.onclose = () => {
-                document.getElementById('status').innerText = "Status: Disconnected from AI Stream.";
-            };
+let device = null, server = null;
+let micChar = null, spkChar = null, ctlChar = null, settingsChar = null, stateChar = null;
+let frames = [];              // Uint8Array(40) per LC3 frame
+let lastSeq = null, lostFrames = 0;
+let settings = null;          // {remoteAudio, responseTimeoutMs, micProfile, speakerVolume}
+let deviceState = null;
+let mode = "loopback";        // "loopback" | "ai"
+let busy = false;
+let wakeLock = null;
+let audioCtx = null;
+let ws = null, wsReady = false;
+let playHead = 0;             // WebAudio scheduling cursor for AI answers
+let aiSentFrames = 0;         // frames already forwarded in this turn
 
-            // 3. Handle Mic Audio (From Device -> AI)
-            micChar.addEventListener('characteristicvaluechanged', (event) => {
-                const value = event.target.value;
-                const audioPayload = new Uint8Array(value.buffer).slice(7); // Strip your firmware's 7-byte header
-                
-                // Convert payload chunk array buffer directly to standard base64 encoding strings
-                const binaryString = String.fromCharCode(...audioPayload);
-                const base64Payload = btoa(binaryString);
+/* ===================== helpers ===================== */
 
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                    socket.send(JSON.stringify({
-                        realtimeInput: { 
-                            mediaChunks: [{ 
-                                data: base64Payload, 
-                                mimeType: "audio/pcm;rate=16000" 
-                            }] 
-                        }
-                    }));
-                }
-            });
+const $ = (id) => document.getElementById(id);
 
-            await micChar.startNotifications();
-        } catch (e) {
-            document.getElementById('status').innerText = "Error: " + e.message;
-            console.error(e);
+function log(msg, cls) {
+  const el = $("log");
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  const t = new Date().toTimeString().slice(0, 8);
+  const line = document.createElement("div");
+  line.innerHTML = `<span class="t">${t}</span> <span class="${cls || ""}"></span>`;
+  line.lastElementChild.textContent = msg;
+  el.appendChild(line);
+  while (el.childElementCount > 400) el.removeChild(el.firstElementChild);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+const logErr = (m) => log(m, "e");
+const logWarn = (m) => log(m, "w");
+const logOk = (m) => log(m, "g");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function setStatus(text, cls) {
+  $("connText").textContent = text;
+  $("dot").className = "dot" + (cls ? " " + cls : "");
+}
+
+function showConnectedUI(on) {
+  for (const id of ["stateCard", "modeCard", "captureCard", "controlCard", "settingsCard"]) {
+    $(id).classList.toggle("hide", !on);
+  }
+  $("aiCard").classList.toggle("hide", !(on && mode === "ai"));
+  $("connectBtn").disabled = on;
+  $("disconnectBtn").disabled = !on;
+}
+
+/* Screen sleep suspends the page, which stalls the paced downlink and can drop
+ * the link. Best-effort: the API is unavailable on some Android builds. */
+async function acquireWakeLock() {
+  if (!("wakeLock" in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => log("Screen wake lock released"));
+  } catch (e) { logWarn("Wake lock unavailable: " + e.message); }
+}
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && device?.gatt?.connected && !wakeLock) {
+    acquireWakeLock();
+  }
+});
+
+/* ===================== connection ===================== */
+
+async function connect() {
+  try {
+    setStatus("Requesting device…", "busy");
+    // The firmware puts the 128-bit service UUID in the advertisement
+    // (BT_DATA_UUID128_ALL in src/ble.c), so a service filter finds it.
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [UUID_SERVICE] }],
+    });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+
+    setStatus("Connecting…", "busy");
+    server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(UUID_SERVICE);
+
+    micChar      = await svc.getCharacteristic(UUID_MIC);
+    spkChar      = await svc.getCharacteristic(UUID_SPK);
+    ctlChar      = await svc.getCharacteristic(UUID_CTL);
+    settingsChar = await svc.getCharacteristic(UUID_SETTINGS);
+    stateChar    = await svc.getCharacteristic(UUID_STATE);
+
+    stateChar.addEventListener("characteristicvaluechanged", onStateNotify);
+    await stateChar.startNotifications();
+    onStateNotify({ target: { value: await stateChar.readValue() } });
+
+    micChar.addEventListener("characteristicvaluechanged", onMicNotify);
+    await micChar.startNotifications();
+
+    await loadSettings();
+
+    // Unlock audio output while we still have the connect gesture; Android
+    // refuses to start an AudioContext without one.
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) audioCtx = new AC();
+    }
+    if (audioCtx?.state === "suspended") await audioCtx.resume();
+
+    await acquireWakeLock();
+
+    FRAMES_PER_WRITE = 12;
+    setStatus(device.name || "Connected", "on");
+    showConnectedUI(true);
+    logOk(`Connected to ${device.name || "necklace"} — subscribed to MIC + STATE`);
+    log("Double-tap the necklace to start recording.");
+  } catch (e) {
+    setStatus("Disconnected", "err");
+    logErr("Connect failed: " + e.message);
+    showConnectedUI(false);
+  }
+}
+
+function onDisconnected() {
+  setStatus("Disconnected");
+  showConnectedUI(false);
+  releaseWakeLock();
+  closeSocket();
+  logWarn("Link dropped.");
+}
+
+function disconnect() {
+  releaseWakeLock();
+  closeSocket();
+  if (device?.gatt?.connected) device.gatt.disconnect();
+  else onDisconnected();
+}
+
+/* ===================== device state ===================== */
+
+function onStateNotify(ev) {
+  const dv = ev.target.value;
+  if (dv.byteLength < 4) return;
+  const st = { state: dv.getUint8(0), flags: dv.getUint8(1),
+               lastError: dv.getUint8(2), ack: dv.getUint8(3) };
+
+  const changed = !deviceState ||
+    st.state !== deviceState.state || st.flags !== deviceState.flags ||
+    st.lastError !== deviceState.lastError || st.ack !== deviceState.ack;
+  const prevState = deviceState ? deviceState.state : null;
+  deviceState = st;
+
+  // A new recording has started: drop the previous utterance so frames from two
+  // captures cannot concatenate into one oversized replay.
+  if (st.state === 2 /* STREAMING */ && prevState !== 2) {
+    resetCapture();
+    log("Recording started — capturing.");
+  }
+
+  const name = STATE_NAMES[st.state] ?? `UNKNOWN(${st.state})`;
+  $("stState").textContent = name;
+  $("stAck").textContent = st.ack;
+  $("stErr").textContent = st.lastError ? String(st.lastError) : "none";
+
+  const errNote = $("stErrNote");
+  if (st.lastError) {
+    errNote.classList.remove("hide");
+    errNote.innerHTML = "<b>Latched error:</b> " +
+      (DEVICE_ERRORS[st.lastError] ?? st.lastError);
+  } else {
+    errNote.classList.add("hide");
+  }
+
+  // bit0 remote audio, bit1 MIC subscribed
+  $("routeSw").checked = (st.flags & 0x01) !== 0;
+
+  if (changed) {
+    const bits = [];
+    if (st.flags & 0x01) bits.push("remote-audio");
+    if (st.flags & 0x02) bits.push("mic-subscribed");
+    log(`STATE: ${name}${bits.length ? " [" + bits.join(", ") + "]" : ""} ack=${st.ack}` +
+        (st.lastError ? "  ERROR=" + (DEVICE_ERRORS[st.lastError] ?? st.lastError) : ""));
+  }
+}
+
+/* ===================== microphone uplink ===================== */
+
+function resetCapture() {
+  frames = []; lastSeq = null; lostFrames = 0; aiSentFrames = 0;
+  updateCaptureUI();
+}
+
+function updateCaptureUI() {
+  $("capFrames").textContent = frames.length;
+  $("capMs").textContent = (frames.length * FRAME_MS / 1000).toFixed(1) + "s";
+  $("capLost").textContent = lostFrames;
+  const has = frames.length > 0 && !busy;
+  $("replayBtn").disabled = !has;
+  $("saveBtn").disabled = !has;
+}
+
+function onMicNotify(ev) {
+  const dv = ev.target.value;
+  if (dv.byteLength < MIC_HEADER_LEN) { logWarn(`runt MIC notification, ${dv.byteLength} B`); return; }
+
+  const seq = dv.getUint8(0);
+  const len = dv.getUint16(5, true);
+
+  // End of utterance is identified by len == 0, NEVER by total notification
+  // length — the firmware already grew this marker from 7 to 12 bytes once.
+  if (len === 0) {
+    let meta = null;
+    if (dv.byteLength >= MIC_HEADER_LEN + END_META_LEN) {
+      meta = {
+        uid: dv.getUint16(MIC_HEADER_LEN, true),
+        attempt: dv.getUint8(MIC_HEADER_LEN + 2),
+        count: dv.getUint16(MIC_HEADER_LEN + 3, true),
+      };
+      const retry = meta.attempt ? " (RE-UPLOAD of an earlier utterance)" : "";
+      log(`End of utterance #${meta.uid}: attempt=${meta.attempt} ` +
+          `frames_sent=${meta.count}, received=${frames.length}${retry}`);
+      if (meta.count !== frames.length) {
+        lostFrames = meta.count - frames.length;
+        logWarn(`frame count mismatch: device sent ${meta.count}, we got ${frames.length}`);
+      }
+    } else {
+      log(`End of utterance (legacy ${dv.byteLength}-byte marker)`);
+    }
+    updateCaptureUI();
+    onUtteranceComplete();
+    return;
+  }
+
+  if (lastSeq !== null) {
+    const expected = (lastSeq + 1) & 0xff;
+    if (seq !== expected) logWarn(`seq gap: expected ${expected}, got ${seq}`);
+  }
+  lastSeq = seq;
+
+  if (dv.byteLength < MIC_HEADER_LEN + len) {
+    logWarn(`truncated: header says ${len}, notification is ${dv.byteLength} B`);
+    return;
+  }
+
+  // One notification carries one OR MORE whole LC3 frames — the firmware packs
+  // as many as the negotiated MTU allows (1 on a link stuck at 23, up to 12 at
+  // 498). Appending the payload whole would make each packed notification a
+  // single oversized "frame" and corrupt both the count and playback.
+  if (len % LC3_FRAME_BYTES !== 0) {
+    logWarn(`payload ${len} B is not a whole number of ${LC3_FRAME_BYTES}-byte frames — dropped`);
+    return;
+  }
+
+  for (let off = 0; off < len; off += LC3_FRAME_BYTES) {
+    frames.push(new Uint8Array(dv.buffer.slice(
+      dv.byteOffset + MIC_HEADER_LEN + off,
+      dv.byteOffset + MIC_HEADER_LEN + off + LC3_FRAME_BYTES)));
+  }
+
+  if (frames.length % 50 < len / LC3_FRAME_BYTES) {
+    log(`… ${frames.length} frames (${frames.length * FRAME_MS} ms)`);
+  }
+  updateCaptureUI();
+
+  if (mode === "ai") streamFramesToAI();
+}
+
+function onUtteranceComplete() {
+  if (!frames.length) { log("Nothing captured — did the recording produce speech?"); return; }
+  if (mode === "loopback") replay();
+  else finishAITurn();
+}
+
+/* ===================== speaker downlink ===================== */
+
+/* Whole LC3 frames only: spk_write_cb() rejects anything that is not a
+ * multiple of 40 bytes and latches SPK_FRAMING. */
+async function writeSpk(bytes) {
+  // CTL/SPK are write-without-response; ATT errors are discarded by the stack
+  // and surface only through the device-state characteristic.
+  if (spkChar.writeValueWithoutResponse) await spkChar.writeValueWithoutResponse(bytes);
+  else await spkChar.writeValue(bytes);
+}
+
+async function replay() {
+  if (busy || !frames.length) return;
+  busy = true;
+  updateCaptureUI();
+
+  const snapshot = frames.slice();
+  const durationMs = snapshot.length * FRAME_MS;
+  log(`Playing back ${snapshot.length} frames (${durationMs} ms)…`);
+
+  // Pace against FRAMES sent, not batches. Batch size can change underneath us
+  // when a write fails and we step down, which would corrupt a batch-indexed
+  // deadline; frames are invariant.
+  const primeFrames = PRIME_BATCHES * FRAMES_PER_WRITE;
+  const start = performance.now();
+  let sent = 0, i = 0;
+
+  try {
+    while (i < snapshot.length) {
+      const n = Math.min(FRAMES_PER_WRITE, snapshot.length - i);
+      const batch = new Uint8Array(n * LC3_FRAME_BYTES);
+      for (let k = 0; k < n; k++) batch.set(snapshot[i + k], k * LC3_FRAME_BYTES);
+
+      // Absolute-deadline pacing after the prime. Deliberately NOT a fixed
+      // sleep per pass — that accumulates the cost of the work into the period
+      // and drains the lead. Deadline is computed from `start`, so a slow
+      // iteration is absorbed instead of compounding.
+      if (i >= primeFrames) {
+        const deadline = start + (i - primeFrames) * FRAME_MS * PACE_RATE;
+        const delay = deadline - performance.now();
+        if (delay > 0) await sleep(delay);
+      }
+
+      try {
+        await writeSpk(batch);
+        sent += n;
+        i += n;
+      } catch (e) {
+        // Most likely the batch exceeded the negotiated MTU. JS cannot read the
+        // MTU, so step down and retry the same frames rather than losing them.
+        if (FRAMES_PER_WRITE > 1) {
+          FRAMES_PER_WRITE = Math.max(1, FRAMES_PER_WRITE >> 1);
+          logWarn(`SPK write failed (${e.message}) — retrying at ${FRAMES_PER_WRITE} frame(s)/write`);
+        } else {
+          logErr("SPK write failed at 1 frame/write: " + e.message);
+          break;
         }
+      }
     }
 
-    // Update Volume (From Web -> Device)
-    async function updateVolume(val) {
-        document.getElementById('volValue').innerText = val + "%";
-        if (volChar) {
-            try {
-                const volumeByte = new Uint8Array([parseInt(val)]);
-                await volChar.writeValueWithoutResponse(volumeByte);
-            } catch (e) { console.error("Volume write failed", e); }
-        }
+    // Explicit end-of-response marker. Without it the device waits out its
+    // 150 ms idle timeout before leaving PLAYBACK.
+    await sleep(50);
+    try {
+      await writeSpk(new Uint8Array(0));
+    } catch (e) {
+      // Some Android/Chrome builds reject a zero-length GATT write. Harmless:
+      // the firmware's idle timeout ends playback ~150 ms later instead.
+      logWarn("zero-length end marker rejected (" + e.message + ") — idle timeout will end playback");
     }
 
-    // Send AI Voice (From AI -> Device)
-    async function sendToSpeaker(base64Data) {
-        const binaryString = atob(base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-        }
+    const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+    logOk(`Sent ${sent}/${snapshot.length} frames in ${elapsed}s (audio is ${(durationMs / 1000).toFixed(2)}s)`);
+  } finally {
+    busy = false;
+    updateCaptureUI();
+  }
+}
 
-        const CHUNK_SIZE = 200; // Fits your BLE MTU limits
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-            const chunk = bytes.slice(i, i + CHUNK_SIZE);
-            await spkChar.writeValueWithoutResponse(chunk);
-        }
+/* ===================== control byte ===================== */
+
+async function writeCtl(commandBits) {
+  // Preserve the persistent route bit: any write to CTL rewrites it.
+  const route = (deviceState?.flags & CTL_REMOTE_AUDIO) ? CTL_REMOTE_AUDIO : 0;
+  const byte = (route & CTL_PERSISTENT_MASK) | commandBits;
+  await ctlChar.writeValue(new Uint8Array([byte]));
+  return byte;
+}
+
+async function setRoute(remote) {
+  try {
+    await ctlChar.writeValue(new Uint8Array([remote ? CTL_REMOTE_AUDIO : 0]));
+    log(`Remote audio route ${remote ? "ENABLED (answer plays on this phone)" : "disabled (necklace speaker)"}`);
+  } catch (e) {
+    logErr("Route write failed: " + e.message);
+    $("routeSw").checked = !remote;
+  }
+}
+
+/* ===================== settings ===================== */
+
+async function loadSettings() {
+  const dv = await settingsChar.readValue();
+  if (dv.byteLength < 5) { logErr(`SETTINGS is ${dv.byteLength} B, expected 5`); return; }
+  settings = {
+    remoteAudio: dv.getUint8(0),
+    responseTimeoutMs: dv.getUint16(1, true),   // little-endian, offset 1, unaligned
+    micProfile: dv.getUint8(3),
+    speakerVolume: dv.getUint8(4),
+  };
+  $("volSlider").value = settings.speakerVolume;
+  $("volValue").textContent = settings.speakerVolume + "%";
+  $("toSlider").value = settings.responseTimeoutMs;
+  $("toValue").textContent = (settings.responseTimeoutMs / 1000) + "s";
+  $("micProfile").value = String(settings.micProfile);
+  log(`Settings: volume=${settings.speakerVolume}% timeout=${settings.responseTimeoutMs}ms ` +
+      `profile=${settings.micProfile} route=${settings.remoteAudio ? "remote" : "local"}`);
+}
+
+/* The characteristic is a packed 5-byte struct and the write handler rejects
+ * anything of a different length outright, so this must be a full
+ * read-modify-write — there is no way to set one field alone. */
+async function applySettings() {
+  if (!settings) return;
+  const vol = Math.min(100, Math.max(0, parseInt($("volSlider").value, 10)));
+  const to  = Math.min(30000, Math.max(5000, parseInt($("toSlider").value, 10)));
+  const prof = Math.min(2, Math.max(0, parseInt($("micProfile").value, 10)));
+
+  const buf = new ArrayBuffer(5);
+  const dv = new DataView(buf);
+  dv.setUint8(0, settings.remoteAudio ? 1 : 0);
+  dv.setUint16(1, to, true);
+  dv.setUint8(3, prof);
+  dv.setUint8(4, vol);
+
+  try {
+    await settingsChar.writeValue(new Uint8Array(buf));
+    logOk(`Settings applied: volume=${vol}% timeout=${to}ms profile=${prof}`);
+    await loadSettings();
+  } catch (e) {
+    // ble_settings_update() validates and returns an ATT error on any field
+    // out of range; the whole write is rejected, not just the bad field.
+    logErr("Settings write rejected: " + e.message);
+  }
+}
+
+/* ===================== .lc3 export ===================== */
+
+/* Writes the container that liblc3's own `dlc3` reads, so a capture can be
+ * decoded on a PC:  dlc3 -i capture.lc3 -o capture.wav
+ * Layout from modules/lib/liblc3/tools/lc3bin.c — 18-byte LE header, then each
+ * frame prefixed with its u16 length. */
+function buildLc3File(frameList) {
+  const HDR = 18;
+  const nsamples = frameList.length * (SAMPLE_RATE * FRAME_MS / 1000);
+  const out = new Uint8Array(HDR + frameList.length * (2 + LC3_FRAME_BYTES));
+  const dv = new DataView(out.buffer);
+  dv.setUint16(0,  0xCC1C, true);          // file_id
+  dv.setUint16(2,  HDR, true);             // header_size
+  dv.setUint16(4,  SAMPLE_RATE / 100, true);
+  dv.setUint16(6,  BITRATE / 100, true);
+  dv.setUint16(8,  1, true);               // channels
+  dv.setUint16(10, (FRAME_MS * 1000) / 10, true); // frame_10us
+  dv.setUint16(12, 0, true);               // epmode
+  dv.setUint16(14, nsamples & 0xffff, true);
+  dv.setUint16(16, nsamples >>> 16, true);
+
+  let p = HDR;
+  for (const f of frameList) {
+    dv.setUint16(p, f.length, true); p += 2;
+    out.set(f, p); p += f.length;
+  }
+  return out;
+}
+
+function saveCapture() {
+  if (!frames.length) return;
+  const blob = new Blob([buildLc3File(frames)], { type: "application/octet-stream" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `necklace-${new Date().toISOString().replace(/[:.]/g, "-")}.lc3`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  logOk(`Saved ${frames.length} frames — decode with:  dlc3 -i <file>.lc3 -o out.wav`);
+}
+
+/* =====================================================================
+ * AI MODE — blocked on an LC3 decoder, and honest about it.
+ *
+ * The necklace uplink is LC3, not PCM. Gemini needs 16 kHz PCM, so the
+ * frames must be decoded before they can be sent. There is no LC3 codec in
+ * any browser (WebCodecs has opus/aac/mp3/flac/pcm, not LC3) and no JS or
+ * WASM build in this workspace, so this path stays disabled until one is
+ * supplied.
+ *
+ * Only a DECODER is needed, not an encoder: AI mode turns on the remote-audio
+ * route, so the answer is played by this phone through WebAudio and never has
+ * to be re-encoded for the necklace speaker.
+ *
+ * To enable, drop a script next to this file that defines:
+ *     window.NecklaceLC3 = { decodeFrame(Uint8Array(40)) -> Int16Array(160) }
+ * liblc3 is already vendored at modules/lib/liblc3 and builds to WASM with
+ * emscripten (not installed here):
+ *     emcc -O3 -I include src/*.c \
+ *          -s EXPORTED_FUNCTIONS=_lc3_decoder_size,_lc3_setup_decoder,_lc3_decode \
+ *          -s MODULARIZE=1 -o lc3-decoder.js
+ * ===================================================================== */
+
+let lc3 = null; // set by the optional sidecar
+
+function lc3Available() { return lc3 !== null; }
+
+function loadLc3Sidecar() {
+  return new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "./lc3-decoder.js";
+    s.onload = () => {
+      lc3 = window.NecklaceLC3 || null;
+      if (lc3) logOk("LC3 decoder loaded — AI mode available.");
+      resolve();
+    };
+    s.onerror = () => resolve(); // absent is the normal case
+    document.head.appendChild(s);
+  });
+}
+
+function renderAIHelp() {
+  const el = $("aiHelp");
+  const ok = lc3Available();
+  // Rebuild the whole class list from state, including the hide flag: assigning
+  // className while leaving `hide` out is what made both mode notes show at once.
+  el.className = "note" + (ok ? "" : " err") + (mode === "ai" ? "" : " hide");
+  if (ok) {
+    el.innerHTML = "<b>AI mode.</b> Uplink is decoded to PCM and streamed to " +
+      "Gemini; the answer plays through this phone via the remote-audio route.";
+  } else {
+    el.innerHTML = "<b>AI mode is unavailable.</b> The necklace uplink is " +
+      "<b>LC3</b>, not PCM, and no browser ships an LC3 codec. Supply " +
+      "<code>lc3-decoder.js</code> next to this file exporting " +
+      "<code>window.NecklaceLC3.decodeFrame()</code> — see the comment in this " +
+      "file for the emscripten command. Loopback mode works without it.";
+  }
+}
+
+function setMode(next) {
+  mode = next;
+  $("modeLoopback").setAttribute("aria-pressed", String(next === "loopback"));
+  $("modeAI").setAttribute("aria-pressed", String(next === "ai"));
+  $("loopbackHelp").classList.toggle("hide", next !== "loopback");
+  $("aiHelp").classList.toggle("hide", next !== "ai");
+  $("aiCard").classList.toggle("hide", !(next === "ai" && device?.gatt?.connected));
+  renderAIHelp();
+
+  if (next === "ai") {
+    // The answer is played here, so the necklace must not expect a downlink.
+    if (device?.gatt?.connected) { $("routeSw").checked = true; setRoute(true); }
+    if (lc3Available()) openSocket();
+  } else {
+    closeSocket();
+    if (device?.gatt?.connected) { $("routeSw").checked = false; setRoute(false); }
+  }
+  log(`Mode: ${next}`);
+}
+
+/* ---- Gemini Live transport ----
+ * NOTE: unverified against a live endpoint — the Live API wire format and model
+ * names move. If the socket opens but nothing comes back, check the setup
+ * message and `realtimeInput` shape against current Gemini docs first. */
+function openSocket() {
+  const key = $("apiKey").value.trim();
+  if (!key) { logWarn("Enter a Gemini API key to use AI mode."); return; }
+  if (ws) return;
+
+  const model = $("model").value.trim() || "gemini-2.0-flash-live-001";
+  const url = "wss://generativelanguage.googleapis.com/ws/" +
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" +
+    encodeURIComponent(key);
+
+  ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      setup: { model: `models/${model}`, generationConfig: { responseModalities: ["AUDIO"] } },
+    }));
+    logOk("Gemini socket open.");
+  };
+  ws.onmessage = async (ev) => {
+    let text = ev.data;
+    if (text instanceof ArrayBuffer) text = new TextDecoder().decode(text);
+    else if (text instanceof Blob) text = await text.text();
+    let msg; try { msg = JSON.parse(text); } catch { return; }
+
+    if (msg.setupComplete) { wsReady = true; log("Gemini session ready."); return; }
+    const parts = msg.serverContent?.modelTurn?.parts || [];
+    for (const p of parts) {
+      if (p.inlineData?.data) playPcm(p.inlineData.data, p.inlineData.mimeType || "");
     }
+    if (msg.serverContent?.turnComplete) log("Gemini turn complete.");
+  };
+  ws.onerror = () => logErr("Gemini socket error.");
+  ws.onclose = (e) => { ws = null; wsReady = false; log(`Gemini socket closed (${e.code}).`); };
+}
+
+function closeSocket() {
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  wsReady = false;
+}
+
+function streamFramesToAI() {
+  if (!wsReady || !lc3Available() || ws?.readyState !== WebSocket.OPEN) return;
+  // Decode only what has not been sent yet, so this can run per notification.
+  const pending = frames.slice(aiSentFrames);
+  if (!pending.length) return;
+  aiSentFrames = frames.length;
+
+  const pcm = new Int16Array(pending.length * 160);
+  pending.forEach((f, i) => {
+    try { pcm.set(lc3.decodeFrame(f), i * 160); }
+    catch (e) { logErr("LC3 decode failed: " + e.message); }
+  });
+
+  ws.send(JSON.stringify({
+    realtimeInput: {
+      mediaChunks: [{ data: b64(new Uint8Array(pcm.buffer)), mimeType: "audio/pcm;rate=16000" }],
+    },
+  }));
+}
+
+function finishAITurn() {
+  streamFramesToAI();
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+    log("Utterance sent to Gemini; waiting for the answer.");
+  }
+  aiSentFrames = 0;
+}
+
+function b64(bytes) {
+  let s = "";
+  const CH = 0x8000; // chunked: String.fromCharCode(...huge) blows the stack
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(s);
+}
+
+/* Gemini Live returns 24 kHz PCM16. Scheduled back-to-back on a running cursor
+ * so consecutive chunks do not overlap or gap. */
+function playPcm(base64Data, mimeType) {
+  if (!audioCtx) return;
+  const m = /rate=(\d+)/.exec(mimeType);
+  const rate = m ? parseInt(m[1], 10) : 24000;
+
+  const bin = atob(base64Data);
+  // Int16Array over the buffer needs an even length; a chunk boundary can split
+  // a sample, so drop the odd trailing byte rather than throwing.
+  const usable = bin.length & ~1;
+  if (!usable) return;
+  const bytes = new Uint8Array(usable);
+  for (let i = 0; i < usable; i++) bytes[i] = bin.charCodeAt(i);
+  const pcm = new Int16Array(bytes.buffer);
+
+  const buf = audioCtx.createBuffer(1, pcm.length, rate);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  if (playHead < now) playHead = now + 0.05;
+  src.start(playHead);
+  playHead += buf.duration;
+}
+
+/* ===================== wiring ===================== */
+
+$("connectBtn").onclick = () => { resetCapture(); connect(); };
+$("disconnectBtn").onclick = disconnect;
+$("modeLoopback").onclick = () => setMode("loopback");
+$("modeAI").onclick = () => setMode("ai");
+$("replayBtn").onclick = replay;
+$("saveBtn").onclick = saveCapture;
+$("clearLog").onclick = () => { $("log").innerHTML = ""; };
+$("applyBtn").onclick = applySettings;
+$("routeSw").onchange = (e) => setRoute(e.target.checked);
+
+$("toneBtn").onclick = async () => {
+  try { const b = await writeCtl(CTL_SPEAKER_TEST); log(`Test tone requested (CTL=0x${b.toString(16).padStart(2, "0")})`); }
+  catch (e) { logErr("Tone request failed: " + e.message); }
+};
+$("abortBtn").onclick = async () => {
+  try { const b = await writeCtl(CTL_ABORT_CAPTURE); log(`Abort requested (CTL=0x${b.toString(16).padStart(2, "0")})`); }
+  catch (e) { logErr("Abort failed: " + e.message); }
+};
+
+$("volSlider").oninput = (e) => { $("volValue").textContent = e.target.value + "%"; };
+$("toSlider").oninput  = (e) => { $("toValue").textContent = (e.target.value / 1000) + "s"; };
+
+/* ---- startup checks ---- */
+(async function init() {
+  const problems = [];
+  // Checked separately from isSecureContext: Chrome/Edge classify file:// AS a
+  // secure context, so that test passes and requestDevice() then fails anyway
+  // because the origin is opaque. Verified in headless Edge.
+  if (location.protocol === "file:") {
+    problems.push("This page was opened with <code>file://</code>. Web Bluetooth " +
+      "refuses that origin even though it counts as a secure context. Serve the " +
+      "file over <code>https://</code>, or over <code>http://localhost</code> via " +
+      "Chrome's <code>chrome://inspect</code> port forwarding.");
+  } else if (!window.isSecureContext) {
+    problems.push("This page is not in a <b>secure context</b>. Web Bluetooth needs " +
+      "<code>https://</code> or <code>localhost</code>.");
+  }
+  if (!navigator.bluetooth) {
+    problems.push("<b>Web Bluetooth is unavailable.</b> Use Chrome for Android. " +
+      "Firefox and Safari do not implement it.");
+  }
+  if (problems.length) {
+    $("unsupported").classList.remove("hide");
+    $("unsupportedMsg").innerHTML = problems.join("<br><br>");
+    $("connectBtn").disabled = true;
+  }
+
+  await loadLc3Sidecar();
+  renderAIHelp();
+  log("Ready. Serve over HTTPS, connect, then double-tap the necklace.");
+})();
 </script>
-
 </body>
 </html>
