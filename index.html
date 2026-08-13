@@ -180,6 +180,14 @@
     <label for="model">Live model</label>
     <input type="text" id="model" value="gemini-2.0-flash-live-001">
   </div>
+  <div class="field">
+    <label>Answer plays on</label>
+    <div class="seg" role="group">
+      <button id="dstPhone" aria-pressed="true">This phone</button>
+      <button id="dstNecklace" aria-pressed="false">Necklace</button>
+    </div>
+    <div class="note hide" id="dstNote"></div>
+  </div>
 </section>
 
 <section id="captureCard" class="hide">
@@ -265,6 +273,8 @@ const LC3_FRAME_BYTES = 40;
 const FRAME_MS = 10;
 const SAMPLE_RATE = 16000;
 const BITRATE = 32000;
+// AUDIO_FRAME_SAMPLES in include/audio.h — one 10 ms LC3 frame at 16 kHz.
+const AUDIO_FRAME_SAMPLES = 160;
 
 // Control byte bits. REMOTE_AUDIO is a persistent MODE bit; the other two are
 // COMMAND bits that the firmware consumes and never stores.
@@ -320,6 +330,7 @@ let audioCtx = null;
 let ws = null, wsReady = false;
 let playHead = 0;             // WebAudio scheduling cursor for AI answers
 let aiSentFrames = 0;         // frames already forwarded in this turn
+let answerDst = "phone";      // "phone" (remote route) | "necklace" (LC3 downlink)
 
 /* ===================== helpers ===================== */
 
@@ -587,72 +598,134 @@ async function writeSpk(bytes) {
   else await spkChar.writeValue(bytes);
 }
 
-async function replay() {
-  if (busy || !frames.length) return;
-  busy = true;
-  updateCaptureUI();
+/**
+ * Queue-backed paced writer for the SPK downlink.
+ *
+ * Both users share it because they differ only in when frames arrive:
+ *  - loopback pushes a whole captured utterance up front and ends immediately;
+ *  - an AI answer pushes frames as Gemini generates them and ends on
+ *    turnComplete.
+ *
+ * Sending starts once a prime lead exists (or the producer has finished), then
+ * paces against an absolute deadline. That is the same shape as the firmware's
+ * audio_play_stream(): take a lead before the peripheral starts, then never let
+ * per-iteration work accumulate into the period.
+ */
+class SpeakerStream {
+  constructor(label) {
+    this.label = label;
+    this.q = [];
+    this.done = false;
+    this.started = false;
+    this.finished = null;   // resolves when the last write is out
+    this.pushed = 0;
+    this.underruns = 0;
+  }
 
-  const snapshot = frames.slice();
-  const durationMs = snapshot.length * FRAME_MS;
-  log(`Playing back ${snapshot.length} frames (${durationMs} ms)…`);
+  push(frameList) {
+    for (const f of frameList) this.q.push(f);
+    this.pushed += frameList.length;
+    this._maybeStart();
+  }
 
-  // Pace against FRAMES sent, not batches. Batch size can change underneath us
-  // when a write fails and we step down, which would corrupt a batch-indexed
-  // deadline; frames are invariant.
-  const primeFrames = PRIME_BATCHES * FRAMES_PER_WRITE;
-  const start = performance.now();
-  let sent = 0, i = 0;
+  end() {
+    this.done = true;
+    this._maybeStart();
+    return this.finished || Promise.resolve();
+  }
 
-  try {
-    while (i < snapshot.length) {
-      const n = Math.min(FRAMES_PER_WRITE, snapshot.length - i);
-      const batch = new Uint8Array(n * LC3_FRAME_BYTES);
-      for (let k = 0; k < n; k++) batch.set(snapshot[i + k], k * LC3_FRAME_BYTES);
+  _maybeStart() {
+    if (this.started) return;
+    // Start on a full prime, or early if the producer is already finished.
+    const primeFrames = PRIME_BATCHES * FRAMES_PER_WRITE;
+    if (this.q.length >= primeFrames || this.done) {
+      this.started = true;
+      this.finished = this._run();
+    }
+  }
 
-      // Absolute-deadline pacing after the prime. Deliberately NOT a fixed
-      // sleep per pass — that accumulates the cost of the work into the period
-      // and drains the lead. Deadline is computed from `start`, so a slow
-      // iteration is absorbed instead of compounding.
-      if (i >= primeFrames) {
-        const deadline = start + (i - primeFrames) * FRAME_MS * PACE_RATE;
-        const delay = deadline - performance.now();
-        if (delay > 0) await sleep(delay);
-      }
+  async _run() {
+    busy = true;
+    updateCaptureUI();
+    const primeFrames = PRIME_BATCHES * FRAMES_PER_WRITE;
+    const start = performance.now();
+    let sent = 0;
 
-      try {
-        await writeSpk(batch);
-        sent += n;
-        i += n;
-      } catch (e) {
-        // Most likely the batch exceeded the negotiated MTU. JS cannot read the
-        // MTU, so step down and retry the same frames rather than losing them.
-        if (FRAMES_PER_WRITE > 1) {
-          FRAMES_PER_WRITE = Math.max(1, FRAMES_PER_WRITE >> 1);
-          logWarn(`SPK write failed (${e.message}) — retrying at ${FRAMES_PER_WRITE} frame(s)/write`);
-        } else {
-          logErr("SPK write failed at 1 frame/write: " + e.message);
-          break;
+    try {
+      for (;;) {
+        // Prefer a full batch: packet rate, not bandwidth, is the binding
+        // constraint on the downlink. Wait briefly for the producer to catch
+        // up, but send short rather than let the device run dry.
+        const waitUntil = performance.now() + 200;
+        while (this.q.length < FRAMES_PER_WRITE && !this.done &&
+               performance.now() < waitUntil) {
+          await sleep(5);
+        }
+        if (!this.q.length) {
+          if (this.done) break;
+          this.underruns++;
+          await sleep(10);
+          continue;
+        }
+
+        const n = Math.min(FRAMES_PER_WRITE, this.q.length);
+        const batch = new Uint8Array(n * LC3_FRAME_BYTES);
+        for (let k = 0; k < n; k++) batch.set(this.q[k], k * LC3_FRAME_BYTES);
+
+        // Absolute-deadline pacing after the prime, against FRAMES sent rather
+        // than batches — batch size changes under an MTU step-down, which would
+        // corrupt a batch-indexed deadline.
+        if (sent >= primeFrames) {
+          const deadline = start + (sent - primeFrames) * FRAME_MS * PACE_RATE;
+          const delay = deadline - performance.now();
+          if (delay > 0) await sleep(delay);
+        }
+
+        try {
+          await writeSpk(batch);
+          this.q.splice(0, n);
+          sent += n;
+        } catch (e) {
+          // Most likely the batch exceeded the negotiated MTU, which JS cannot
+          // read. Step down and retry the same frames rather than losing them.
+          if (FRAMES_PER_WRITE > 1) {
+            FRAMES_PER_WRITE = Math.max(1, FRAMES_PER_WRITE >> 1);
+            logWarn(`SPK write failed (${e.message}) — retrying at ${FRAMES_PER_WRITE} frame(s)/write`);
+          } else {
+            logErr("SPK write failed at 1 frame/write: " + e.message);
+            break;
+          }
         }
       }
-    }
 
-    // Explicit end-of-response marker. Without it the device waits out its
-    // 150 ms idle timeout before leaving PLAYBACK.
-    await sleep(50);
-    try {
-      await writeSpk(new Uint8Array(0));
-    } catch (e) {
-      // Some Android/Chrome builds reject a zero-length GATT write. Harmless:
-      // the firmware's idle timeout ends playback ~150 ms later instead.
-      logWarn("zero-length end marker rejected (" + e.message + ") — idle timeout will end playback");
-    }
+      // Explicit end-of-response marker. Without it the device waits out its
+      // 150 ms idle timeout before leaving PLAYBACK.
+      await sleep(50);
+      try {
+        await writeSpk(new Uint8Array(0));
+      } catch (e) {
+        // Some Android/Chrome builds reject a zero-length GATT write. Harmless:
+        // the firmware's idle timeout ends playback ~150 ms later instead.
+        logWarn("zero-length end marker rejected (" + e.message + ") — idle timeout will end playback");
+      }
 
-    const elapsed = ((performance.now() - start) / 1000).toFixed(2);
-    logOk(`Sent ${sent}/${snapshot.length} frames in ${elapsed}s (audio is ${(durationMs / 1000).toFixed(2)}s)`);
-  } finally {
-    busy = false;
-    updateCaptureUI();
+      const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+      const audioS = (sent * FRAME_MS / 1000).toFixed(2);
+      logOk(`${this.label}: sent ${sent}/${this.pushed} frames in ${elapsed}s (audio is ${audioS}s)` +
+            (this.underruns ? `  [${this.underruns} starved waits]` : ""));
+    } finally {
+      busy = false;
+      updateCaptureUI();
+    }
   }
+}
+
+async function replay() {
+  if (busy || !frames.length) return;
+  const s = new SpeakerStream("Loopback");
+  log(`Playing back ${frames.length} frames (${frames.length * FRAME_MS} ms)…`);
+  s.push(frames.slice());
+  await s.end();
 }
 
 /* ===================== control byte ===================== */
@@ -763,30 +836,95 @@ function saveCapture() {
 }
 
 /* =====================================================================
- * AI MODE — blocked on an LC3 decoder, and honest about it.
+ * AI MODE — gated on an LC3 sidecar, in two independent halves.
  *
- * The necklace uplink is LC3, not PCM. Gemini needs 16 kHz PCM, so the
- * frames must be decoded before they can be sent. There is no LC3 codec in
- * any browser (WebCodecs has opus/aac/mp3/flac/pcm, not LC3) and no JS or
- * WASM build in this workspace, so this path stays disabled until one is
- * supplied.
+ * No browser ships an LC3 codec (WebCodecs covers opus/aac/mp3/flac/pcm), so
+ * both directions depend on a script dropped next to this file:
  *
- * Only a DECODER is needed, not an encoder: AI mode turns on the remote-audio
- * route, so the answer is played by this phone through WebAudio and never has
- * to be re-encoded for the necklace speaker.
+ *   window.NecklaceLC3 = {
+ *     decodeFrame(Uint8Array(40))  -> Int16Array(160),   // required for AI mode
+ *     encodeFrame(Int16Array(160)) -> Uint8Array(40),    // optional
+ *   }
  *
- * To enable, drop a script next to this file that defines:
- *     window.NecklaceLC3 = { decodeFrame(Uint8Array(40)) -> Int16Array(160) }
- * liblc3 is already vendored at modules/lib/liblc3 and builds to WASM with
- * emscripten (not installed here):
+ * DECODE is what AI mode needs at all: the uplink is LC3 and Gemini needs
+ * 16 kHz PCM. With decode alone the answer plays on THIS PHONE over WebAudio,
+ * via the remote-audio route, and the necklace speaker stays silent.
+ *
+ * ENCODE is what puts the answer on the NECKLACE speaker. It also requires a
+ * rate conversion: Gemini Live returns 24 kHz PCM and the device is fixed at
+ * 16 kHz, so encoding Gemini's samples as-is would play ~50% slow.
+ *
+ * liblc3 is vendored at modules/lib/liblc3 and builds to WASM with emscripten:
  *     emcc -O3 -I include src/*.c \
- *          -s EXPORTED_FUNCTIONS=_lc3_decoder_size,_lc3_setup_decoder,_lc3_decode \
+ *          -s EXPORTED_FUNCTIONS=_lc3_decoder_size,_lc3_setup_decoder,_lc3_decode,\
+ * _lc3_encoder_size,_lc3_setup_encoder,_lc3_encode,_lc3_frame_samples,_malloc,_free \
  *          -s MODULARIZE=1 -o lc3-decoder.js
  * ===================================================================== */
 
 let lc3 = null; // set by the optional sidecar
 
-function lc3Available() { return lc3 !== null; }
+function lc3CanDecode() { return typeof lc3?.decodeFrame === "function"; }
+function lc3CanEncode() { return typeof lc3?.encodeFrame === "function"; }
+function lc3Available() { return lc3CanDecode(); }
+
+/* ---- 24 kHz -> 16 kHz streaming resampler -------------------------------
+ * Windowed-sinc interpolation with a normalised kernel, carrying its history
+ * and fractional phase across calls. Stateful on purpose: Gemini delivers audio
+ * in arbitrary chunks, and resampling each one independently would put a
+ * discontinuity at every boundary — audible as a click per chunk.
+ *
+ * The kernel cutoff is set to the rate ratio, which is what suppresses the
+ * 8-12 kHz band that would otherwise alias into the 16 kHz output.
+ */
+class Resampler {
+  constructor(inRate, outRate, half = 12) {
+    this.ratio = inRate / outRate;
+    this.half = half;
+    this.cutoff = Math.min(1, outRate / inRate);
+    this.buf = new Float32Array(0);
+    this.pos = 0;
+  }
+
+  static sinc(x) {
+    if (Math.abs(x) < 1e-9) return 1;
+    const p = Math.PI * x;
+    return Math.sin(p) / p;
+  }
+
+  _tap(buf, p) {
+    const i0 = Math.floor(p), frac = p - i0;
+    let acc = 0, norm = 0;
+    for (let k = -this.half + 1; k <= this.half; k++) {
+      const idx = i0 + k;
+      if (idx < 0 || idx >= buf.length) continue;
+      const x = k - frac;
+      // Hann taper over the kernel support, then normalise by the weight sum so
+      // gain stays flat regardless of where the fractional phase lands.
+      const w = Resampler.sinc(x * this.cutoff) *
+                0.5 * (1 + Math.cos(Math.PI * x / this.half));
+      acc += buf[idx] * w;
+      norm += w;
+    }
+    return norm ? acc / norm : 0;
+  }
+
+  process(input) {
+    const buf = new Float32Array(this.buf.length + input.length);
+    buf.set(this.buf);
+    buf.set(input, this.buf.length);
+
+    const out = [];
+    let p = this.pos;
+    const limit = buf.length - this.half;   // keep `half` samples of lookahead
+    while (p < limit) { out.push(this._tap(buf, p)); p += this.ratio; }
+
+    // Retain enough history for the kernel's left half on the next call.
+    const keepFrom = Math.max(0, Math.floor(p) - this.half);
+    this.buf = buf.slice(keepFrom);
+    this.pos = p - keepFrom;
+    return Float32Array.from(out);
+  }
+}
 
 function loadLc3Sidecar() {
   return new Promise((resolve) => {
@@ -794,7 +932,13 @@ function loadLc3Sidecar() {
     s.src = "./lc3-decoder.js";
     s.onload = () => {
       lc3 = window.NecklaceLC3 || null;
-      if (lc3) logOk("LC3 decoder loaded — AI mode available.");
+      if (lc3CanDecode()) {
+        logOk("LC3 sidecar loaded — decode" +
+              (lc3CanEncode() ? " + encode (necklace playback available)."
+                              : " only (answer plays on this phone)."));
+      } else if (lc3) {
+        logErr("Sidecar loaded but exports no decodeFrame() — AI mode stays off.");
+      }
       resolve();
     };
     s.onerror = () => resolve(); // absent is the normal case
@@ -804,13 +948,16 @@ function loadLc3Sidecar() {
 
 function renderAIHelp() {
   const el = $("aiHelp");
-  const ok = lc3Available();
+  const ok = lc3CanDecode();
   // Rebuild the whole class list from state, including the hide flag: assigning
   // className while leaving `hide` out is what made both mode notes show at once.
   el.className = "note" + (ok ? "" : " err") + (mode === "ai" ? "" : " hide");
   if (ok) {
-    el.innerHTML = "<b>AI mode.</b> Uplink is decoded to PCM and streamed to " +
-      "Gemini; the answer plays through this phone via the remote-audio route.";
+    el.innerHTML = "<b>AI mode.</b> Uplink is decoded to PCM and streamed to Gemini. " +
+      (lc3CanEncode()
+        ? "Encoder present — the answer can play on either the phone or the necklace."
+        : "<b>Decoder only:</b> the answer can play on this phone, but not on the " +
+          "necklace. Add <code>encodeFrame()</code> to the sidecar for that.");
   } else {
     el.innerHTML = "<b>AI mode is unavailable.</b> The necklace uplink is " +
       "<b>LC3</b>, not PCM, and no browser ships an LC3 codec. Supply " +
@@ -820,24 +967,135 @@ function renderAIHelp() {
   }
 }
 
+function renderDestination() {
+  const canEnc = lc3CanEncode();
+  $("dstPhone").setAttribute("aria-pressed", String(answerDst === "phone"));
+  $("dstNecklace").setAttribute("aria-pressed", String(answerDst === "necklace"));
+  $("dstNecklace").disabled = !canEnc;
+
+  const note = $("dstNote");
+  if (!canEnc) {
+    note.className = "note err";
+    note.innerHTML = "<b>Necklace playback needs an encoder.</b> The sidecar " +
+      "exports <code>decodeFrame()</code> but not <code>encodeFrame()</code>.";
+  } else if (answerDst === "necklace") {
+    note.className = "note";
+    note.innerHTML = "Answer is resampled 24 kHz &rarr; 16 kHz, LC3-encoded and " +
+      "streamed to the necklace speaker as it is generated.";
+  } else {
+    note.className = "note hide";
+  }
+}
+
+function setAnswerDst(dst) {
+  if (dst === "necklace" && !lc3CanEncode()) {
+    logWarn("No LC3 encoder in the sidecar — answer stays on this phone.");
+    return;
+  }
+  answerDst = dst;
+  renderDestination();
+  // The route decides whether the device expects a downlink at all: with remote
+  // audio ON, spk_write_cb() discards every frame we send.
+  if (mode === "ai" && device?.gatt?.connected) {
+    const remote = dst === "phone";
+    $("routeSw").checked = remote;
+    setRoute(remote);
+  }
+  log(`AI answer destination: ${dst === "phone" ? "this phone" : "necklace speaker"}`);
+}
+
 function setMode(next) {
   mode = next;
   $("modeLoopback").setAttribute("aria-pressed", String(next === "loopback"));
   $("modeAI").setAttribute("aria-pressed", String(next === "ai"));
   $("loopbackHelp").classList.toggle("hide", next !== "loopback");
-  $("aiHelp").classList.toggle("hide", next !== "ai");
   $("aiCard").classList.toggle("hide", !(next === "ai" && device?.gatt?.connected));
   renderAIHelp();
+  renderDestination();
 
   if (next === "ai") {
-    // The answer is played here, so the necklace must not expect a downlink.
-    if (device?.gatt?.connected) { $("routeSw").checked = true; setRoute(true); }
-    if (lc3Available()) openSocket();
+    // Route follows the destination: remote ON keeps the answer here, remote
+    // OFF is what lets a downlink reach the speaker.
+    if (device?.gatt?.connected) {
+      const remote = answerDst === "phone";
+      $("routeSw").checked = remote;
+      setRoute(remote);
+    }
+    if (lc3CanDecode()) openSocket();
   } else {
     closeSocket();
+    // Loopback drives the onboard speaker, so the downlink must not be discarded.
     if (device?.gatt?.connected) { $("routeSw").checked = false; setRoute(false); }
   }
   log(`Mode: ${next}`);
+}
+
+/* ---- answer playback (device path) ----
+ * Frames are produced as Gemini generates them and handed straight to a
+ * SpeakerStream, which starts once it holds a prime lead. Buffering the whole
+ * turn first would be simpler but risks the device's response timeout
+ * (5-30 s, default 15 s): that window closes on the FIRST downlink frame, so
+ * starting early is what keeps a long answer from timing out.
+ */
+let answerStream = null, answerResampler = null, answerAcc = new Float32Array(0);
+let answerEncodeErrs = 0;
+
+function beginAnswer() {
+  if (answerStream) return;
+  answerStream = new SpeakerStream("AI answer");
+  answerResampler = null;
+  answerAcc = new Float32Array(0);
+  answerEncodeErrs = 0;
+  log("Answer incoming — encoding to the necklace speaker.");
+}
+
+function onAnswerPcm(pcm, rate) {
+  beginAnswer();
+  if (!answerResampler) answerResampler = new Resampler(rate, SAMPLE_RATE);
+
+  const f32 = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768;
+  const res = answerResampler.process(f32);
+
+  const merged = new Float32Array(answerAcc.length + res.length);
+  merged.set(answerAcc);
+  merged.set(res, answerAcc.length);
+
+  const out = [];
+  let off = 0;
+  for (; off + AUDIO_FRAME_SAMPLES <= merged.length; off += AUDIO_FRAME_SAMPLES) {
+    const frame = new Int16Array(AUDIO_FRAME_SAMPLES);
+    for (let i = 0; i < AUDIO_FRAME_SAMPLES; i++) {
+      const s = Math.max(-1, Math.min(1, merged[off + i]));
+      frame[i] = s < 0 ? s * 32768 : s * 32767;
+    }
+    try {
+      out.push(lc3.encodeFrame(frame));
+    } catch (e) {
+      if (!answerEncodeErrs++) logErr("LC3 encode failed: " + e.message);
+    }
+  }
+  answerAcc = merged.slice(off);
+  if (out.length) answerStream.push(out);
+}
+
+async function endAnswer() {
+  if (!answerStream) return;
+  // Pad the trailing partial frame: LC3 is fixed-size, so a short tail cannot
+  // be sent as-is and dropping it would clip the last word.
+  if (answerAcc.length) {
+    const frame = new Int16Array(AUDIO_FRAME_SAMPLES);
+    for (let i = 0; i < answerAcc.length; i++) {
+      const s = Math.max(-1, Math.min(1, answerAcc[i]));
+      frame[i] = s < 0 ? s * 32768 : s * 32767;
+    }
+    try { answerStream.push([lc3.encodeFrame(frame)]); } catch { /* already counted */ }
+  }
+  const s = answerStream;
+  answerStream = null;
+  answerAcc = new Float32Array(0);
+  if (answerEncodeErrs > 1) logWarn(`${answerEncodeErrs} frames failed to encode`);
+  await s.end();
 }
 
 /* ---- Gemini Live transport ----
@@ -872,9 +1130,18 @@ function openSocket() {
     if (msg.setupComplete) { wsReady = true; log("Gemini session ready."); return; }
     const parts = msg.serverContent?.modelTurn?.parts || [];
     for (const p of parts) {
-      if (p.inlineData?.data) playPcm(p.inlineData.data, p.inlineData.mimeType || "");
+      if (!p.inlineData?.data) continue;
+      const pcm = decodeB64Pcm(p.inlineData.data);
+      if (!pcm) continue;
+      const m = /rate=(\d+)/.exec(p.inlineData.mimeType || "");
+      const rate = m ? parseInt(m[1], 10) : 24000;   // Gemini Live returns 24 kHz
+      if (answerDst === "necklace" && lc3CanEncode()) onAnswerPcm(pcm, rate);
+      else playPcm(pcm, rate);
     }
-    if (msg.serverContent?.turnComplete) log("Gemini turn complete.");
+    if (msg.serverContent?.turnComplete) {
+      log("Gemini turn complete.");
+      if (answerDst === "necklace") endAnswer();
+    }
   };
   ws.onerror = () => logErr("Gemini socket error.");
   ws.onclose = (e) => { ws = null; wsReady = false; log(`Gemini socket closed (${e.code}).`); };
@@ -923,22 +1190,21 @@ function b64(bytes) {
   return btoa(s);
 }
 
-/* Gemini Live returns 24 kHz PCM16. Scheduled back-to-back on a running cursor
- * so consecutive chunks do not overlap or gap. */
-function playPcm(base64Data, mimeType) {
-  if (!audioCtx) return;
-  const m = /rate=(\d+)/.exec(mimeType);
-  const rate = m ? parseInt(m[1], 10) : 24000;
-
+function decodeB64Pcm(base64Data) {
   const bin = atob(base64Data);
   // Int16Array over the buffer needs an even length; a chunk boundary can split
   // a sample, so drop the odd trailing byte rather than throwing.
   const usable = bin.length & ~1;
-  if (!usable) return;
+  if (!usable) return null;
   const bytes = new Uint8Array(usable);
   for (let i = 0; i < usable; i++) bytes[i] = bin.charCodeAt(i);
-  const pcm = new Int16Array(bytes.buffer);
+  return new Int16Array(bytes.buffer);
+}
 
+/* Phone-side playback. Scheduled back-to-back on a running cursor so
+ * consecutive chunks do not overlap or gap. */
+function playPcm(pcm, rate) {
+  if (!audioCtx) return;
   const buf = audioCtx.createBuffer(1, pcm.length, rate);
   const ch = buf.getChannelData(0);
   for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
@@ -958,6 +1224,8 @@ $("connectBtn").onclick = () => { resetCapture(); connect(); };
 $("disconnectBtn").onclick = disconnect;
 $("modeLoopback").onclick = () => setMode("loopback");
 $("modeAI").onclick = () => setMode("ai");
+$("dstPhone").onclick = () => setAnswerDst("phone");
+$("dstNecklace").onclick = () => setAnswerDst("necklace");
 $("replayBtn").onclick = replay;
 $("saveBtn").onclick = saveCapture;
 $("clearLog").onclick = () => { $("log").innerHTML = ""; };
@@ -1003,6 +1271,7 @@ $("toSlider").oninput  = (e) => { $("toValue").textContent = (e.target.value / 1
 
   await loadLc3Sidecar();
   renderAIHelp();
+  renderDestination();
   log("Ready. Serve over HTTPS, connect, then double-tap the necklace.");
 })();
 </script>
