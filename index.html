@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,7 +8,7 @@
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
         .container { max-width: 500px; margin: auto; background: #2d2d2d; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        input[type="text"], input[type="range"] { width: 100%; margin: 15px 0; }
+        input[type="text"], input[type="range"] { width: 100%; margin: 15px 0; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #222; color: #fff; box-sizing: border-box; }
         button { background: #00e676; border: none; padding: 15px 30px; border-radius: 25px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.3s; }
         button:hover { background: #00c853; transform: scale(1.05); }
         .status { margin-top: 20px; color: #bbb; font-style: italic; }
@@ -59,32 +60,70 @@
             spkChar = await service.getCharacteristic(SPK_CHAR_UUID);
             volChar = await service.getCharacteristic(VOL_CHAR_UUID);
 
-            // 2. Connect Gemini WebSocket
-            const url = `wss://://googleapis.com{API_KEY}`;
+            document.getElementById('status').innerText = "Status: Connecting to Gemini AI Live...";
+
+            // 2. Connect Gemini Multimodal Live WebSocket
+            const host = "generativelanguage.googleapis.com";
+            const path = "google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent";
+            const url = `wss://${host}/ws/${path}?key=${API_KEY}`;
+            
             socket = new WebSocket(url);
 
             socket.onopen = () => {
                 document.getElementById('status').innerText = "Status: AI Connected! Speak into your necklace.";
-                socket.send(JSON.stringify({ setup: { model: "models/gemini-2.0-flash-exp" } }));
+                
+                // Formally initiate session setup with specific required configuration fields
+                const setupMessage = {
+                    setup: {
+                        model: "models/gemini-2.0-flash-exp",
+                        generationConfig: {
+                            responseModalities: ["AUDIO"] // Explicitly request voice response back
+                        }
+                    }
+                };
+                socket.send(JSON.stringify(setupMessage));
             };
 
             socket.onmessage = async (event) => {
-                const response = JSON.parse(event.data);
-                if (response.serverContent?.modelTurn?.parts?.[0]?.inlineData) {
-                    const base64Audio = response.serverContent.modelTurn.parts[0].inlineData.data;
-                    await sendToSpeaker(base64Audio);
+                try {
+                    const response = JSON.parse(event.data);
+                    
+                    // Route parsed audio stream content directly down to speaker characteristics
+                    if (response.serverContent?.modelTurn?.parts?.[0]?.inlineData) {
+                        const base64Audio = response.serverContent.modelTurn.parts[0].inlineData.data;
+                        await sendToSpeaker(base64Audio);
+                    }
+                } catch (err) {
+                    console.error("Failed to parse incoming WS message: ", err);
                 }
+            };
+
+            socket.onerror = (err) => {
+                document.getElementById('status').innerText = "WebSocket Connection Error.";
+                console.error(err);
+            };
+
+            socket.onclose = () => {
+                document.getElementById('status').innerText = "Status: Disconnected from AI Stream.";
             };
 
             // 3. Handle Mic Audio (From Device -> AI)
             micChar.addEventListener('characteristicvaluechanged', (event) => {
                 const value = event.target.value;
-                const audioPayload = new Uint8Array(value.buffer).slice(7); // Strip 7-byte header
-                const base64Payload = btoa(String.fromCharCode(...audioPayload));
+                const audioPayload = new Uint8Array(value.buffer).slice(7); // Strip your firmware's 7-byte header
+                
+                // Convert payload chunk array buffer directly to standard base64 encoding strings
+                const binaryString = String.fromCharCode(...audioPayload);
+                const base64Payload = btoa(binaryString);
 
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({
-                        realtimeInput: { mediaChunks: [{ data: base64Payload, mimeType: "audio/pcm;rate=16000" }] }
+                        realtimeInput: { 
+                            mediaChunks: [{ 
+                                data: base64Payload, 
+                                mimeType: "audio/pcm;rate=16000" 
+                            }] 
+                        }
                     }));
                 }
             });
@@ -111,9 +150,11 @@
     async function sendToSpeaker(base64Data) {
         const binaryString = atob(base64Data);
         const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
 
-        const CHUNK_SIZE = 200; // Fits your MTU
+        const CHUNK_SIZE = 200; // Fits your BLE MTU limits
         for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
             const chunk = bytes.slice(i, i + CHUNK_SIZE);
             await spkChar.writeValueWithoutResponse(chunk);
