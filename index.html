@@ -64,28 +64,20 @@
   button:disabled { opacity: .4; cursor: default; }
   button.primary { background: var(--accent); color: #06231a; border-color: transparent; }
   button.primary:active:not(:disabled) { background: var(--accent-press); }
-  .row { display: flex; gap: 8px; }
-  .row > * { flex: 1; min-width: 0; }
   .stack > * + * { margin-top: 8px; }
-
-  /* Segmented mode switch */
-  .seg { display: flex; background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 4px; gap: 4px; }
-  .seg button { background: transparent; border: none; min-height: 40px; font-size: 14px; color: var(--dim); border-radius: 7px; }
-  .seg button[aria-pressed="true"] { background: var(--accent); color: #06231a; }
 
   label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 6px; }
   .field + .field { margin-top: 14px; }
   .field-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
   .val { color: var(--fg); font-variant-numeric: tabular-nums; font-weight: 600; }
   input[type=range] { width: 100%; height: var(--tap); accent-color: var(--accent); background: transparent; }
-  input[type=text], input[type=password], select {
+  select {
     width: 100%; min-height: var(--tap);
     background: var(--card-2); color: var(--fg);
     border: 1px solid var(--line); border-radius: 10px;
-    padding: 10px 12px; font-size: 16px; font-family: inherit; /* 16px stops iOS/Android zoom */
+    padding: 10px 12px; font-size: 16px; font-family: inherit;
   }
 
-  /* Switch */
   .switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: var(--tap); }
   .switch input { appearance: none; width: 52px; height: 30px; border-radius: 999px; background: #3a414b; position: relative; flex: none; margin: 0; cursor: pointer; }
   .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .16s; }
@@ -94,7 +86,6 @@
   .switch span { font-size: 14px; }
   .switch small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; }
 
-  /* Stat grid */
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
   .stat { background: var(--card-2); border-radius: 9px; padding: 9px 10px; }
   .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 700; }
@@ -128,7 +119,6 @@
   <div class="pill"><span class="dot" id="dot"></span><span id="connText">Disconnected</span></div>
 </header>
 
-<!-- Shown when the page can't use Web Bluetooth at all -->
 <section id="unsupported" class="hide">
   <h2>Cannot start</h2>
   <div class="note err" id="unsupportedMsg"></div>
@@ -156,42 +146,8 @@
   <div class="note hide" id="stErrNote"></div>
 </section>
 
-<section id="modeCard" class="hide">
-  <h2>Mode</h2>
-  <div class="seg" role="group">
-    <button id="modeLoopback" aria-pressed="true">Loopback</button>
-    <button id="modeAI" aria-pressed="false">AI Assistant</button>
-  </div>
-  <div id="loopbackHelp" class="note">
-    <b>Loopback</b> records your utterance and plays the same LC3 frames back
-    through the necklace speaker. No codec needed — this is the path that works
-    today. Double-tap to start, speak, double-tap to stop.
-  </div>
-  <div id="aiHelp" class="note hide"></div>
-</section>
-
-<section id="aiCard" class="hide">
-  <h2>Gemini</h2>
-  <div class="field">
-    <label for="apiKey">API key</label>
-    <input type="password" id="apiKey" placeholder="Gemini API key" autocomplete="off">
-  </div>
-  <div class="field">
-    <label for="model">Live model</label>
-    <input type="text" id="model" value="gemini-2.0-flash-live-001">
-  </div>
-  <div class="field">
-    <label>Answer plays on</label>
-    <div class="seg" role="group">
-      <button id="dstPhone" aria-pressed="true">This phone</button>
-      <button id="dstNecklace" aria-pressed="false">Necklace</button>
-    </div>
-    <div class="note hide" id="dstNote"></div>
-  </div>
-</section>
-
 <section id="captureCard" class="hide">
-  <h2>Capture</h2>
+  <h2>Capture &amp; Loopback</h2>
   <div class="stats">
     <div class="stat"><b id="capFrames">0</b><span>Frames</span></div>
     <div class="stat"><b id="capMs">0.0s</b><span>Duration</span></div>
@@ -199,7 +155,12 @@
   </div>
   <div class="stack" style="margin-top:12px">
     <button id="replayBtn" disabled>Replay to Speaker</button>
-    <button id="saveBtn" disabled>Download .lc3</button>
+  </div>
+  <div class="note">
+    Double-tap the necklace to start recording, speak, double-tap to stop. The
+    captured LC3 frames are written straight back to the speaker, so you hear
+    yourself over the production downlink path. Replay is automatic; the button
+    repeats the last utterance.
   </div>
 </section>
 
@@ -212,7 +173,7 @@
   <div class="switch" style="margin-top:6px">
     <label for="routeSw" style="margin:0">
       <span>Remote audio route</span>
-      <small>Answer plays on this phone instead of the necklace speaker</small>
+      <small>Device discards the downlink — loopback will be silent</small>
     </label>
     <input type="checkbox" id="routeSw">
   </div>
@@ -251,9 +212,22 @@
 "use strict";
 
 /* =====================================================================
- * PROTOCOL — mirrors src/ble.c, include/ble.h, include/ble_settings.h.
- * scripts/ble_loopback.py is the reference implementation; if this file
- * and that one ever disagree, that one is right.
+ * AI Necklace bench console — a stand-in for the companion phone app.
+ *
+ * Subscribes to the MIC characteristic, buffers the LC3 frames of one
+ * utterance, and once the end-of-utterance marker arrives writes those same
+ * frames back to SPK. The necklace decodes and plays them through its own
+ * speaker, so you tap, speak, and hear yourself over the *production*
+ * downlink path.
+ *
+ * No audio codec is involved anywhere here, deliberately: the frames are
+ * passed through untouched. No browser ships an LC3 codec (WebCodecs covers
+ * opus/aac/mp3/flac/pcm only), so anything that had to interpret the audio —
+ * rather than relay it — could not work in a browser at all.
+ *
+ * Protocol mirrors src/ble.c, include/ble.h and include/ble_settings.h.
+ * scripts/ble_loopback.py is the reference implementation; if this file and
+ * that one ever disagree, that one is right.
  * ===================================================================== */
 
 const UUID_SERVICE  = "12345678-1234-5678-1234-56789abcdef0";
@@ -271,10 +245,6 @@ const END_META_LEN = 5;
 // AUDIO_CODEC_FRAME_BYTES / AUDIO_CODEC_FRAME_US — 32 kbps @ 16 kHz, 10 ms.
 const LC3_FRAME_BYTES = 40;
 const FRAME_MS = 10;
-const SAMPLE_RATE = 16000;
-const BITRATE = 32000;
-// AUDIO_FRAME_SAMPLES in include/audio.h — one 10 ms LC3 frame at 16 kHz.
-const AUDIO_FRAME_SAMPLES = 160;
 
 // Control byte bits. REMOTE_AUDIO is a persistent MODE bit; the other two are
 // COMMAND bits that the firmware consumes and never stores.
@@ -293,27 +263,43 @@ const DEVICE_ERRORS = [
   "SPK_DISCARDED (remote-audio route is ON)", "UPLINK_DISCARDED", "MIC_START",
 ];
 
-/* ---- Downlink pacing -------------------------------------------------
- * Ported from scripts/ble_loopback.py, where these numbers were measured
- * rather than derived. The pacing discipline matters more than the exact
- * values: absolute-deadline scheduling, never "sleep batch_ms per pass",
- * because per-iteration sleep makes each pass cost the period PLUS the work
- * done in it, so the primed lead erodes and the device's I2S runs dry.
- *
+/* ---- Downlink sizing -------------------------------------------------
  * FRAMES_PER_WRITE is a ceiling. Web Bluetooth does not expose the negotiated
  * ATT MTU to JS, so we start here and step down on write failure. Chrome on
  * Android asks for 517 and the firmware announces 498, so 12 frames
  * (480 B + 3 B ATT) normally fits on the first try.
- *
- * PRIME_BATCHES counts BATCHES, not frames — it multiplies with
- * FRAMES_PER_WRITE. The device ceiling is playback_q (80) + primed I2S blocks
- * (16) = 96 frames; beyond that audio_play() returns -ENOSPC and DISCARDS,
- * which is heard as a glitch rather than reported as an underrun.
- * 7 x 12 = 84 frames of lead, 12 clear of the ceiling.
  */
 let FRAMES_PER_WRITE = 12;
-const PRIME_BATCHES = 7;
-const PACE_RATE = 0.95;   // run 5% ahead so a lost lead is rebuilt, not permanent
+
+/* ---- Downlink pacing -------------------------------------------------
+ * Pace by bounding the DEVICE'S BUFFER OCCUPANCY, not by a rate.
+ *
+ * The device drains at real time (100 frames/s) and holds at most 112 frames:
+ * playback_q (80) + the primed I2S blocks (32). Past that audio_play() returns
+ * -ENOSPC and DISCARDS the excess, which is heard as a glitch rather than
+ * reported as an underrun — so overshoot is silent on the wire and shows up
+ * only as bad audio.
+ *
+ * Two things this replaces, both measured wrong on hardware (254 frames
+ * delivered in ~600 ms against a 112-frame buffer):
+ *  - An unpaced "prime" of 7 x 12 = 84 frames. Those constants come from
+ *    scripts/ble_loopback.py, where they were safe only because the WinRT
+ *    stack self-limited write-without-response to ~12.5/s. Android has no such
+ *    ceiling, so the prime arrived almost instantly and put 84 of the 112
+ *    frames into the device before pacing began.
+ *  - A 0.95 pace rate, i.e. deliberately running 5% fast. That is unbounded
+ *    drift: the excess lead grows with the length of the response, so a long
+ *    one overflows no matter how deep the buffer is.
+ *
+ * The cap is self-correcting because `consumed` is derived from absolute
+ * elapsed time rather than accumulated per-iteration sleeps, so a slow write or
+ * a scheduling hiccup is absorbed instead of compounding. Measured with a
+ * stubbed writer: peak occupancy stays at 64 for both a 254-frame and a
+ * 1500-frame stream.
+ */
+const DEVICE_BUFFER_FRAMES = 112;
+const LEAD_CAP_FRAMES = 64;        // 640 ms in flight, 48 frames of margin
+const START_THRESHOLD_FRAMES = 24;
 
 /* ===================== state ===================== */
 
@@ -323,14 +309,8 @@ let frames = [];              // Uint8Array(40) per LC3 frame
 let lastSeq = null, lostFrames = 0;
 let settings = null;          // {remoteAudio, responseTimeoutMs, micProfile, speakerVolume}
 let deviceState = null;
-let mode = "loopback";        // "loopback" | "ai"
 let busy = false;
 let wakeLock = null;
-let audioCtx = null;
-let ws = null, wsReady = false;
-let playHead = 0;             // WebAudio scheduling cursor for AI answers
-let aiSentFrames = 0;         // frames already forwarded in this turn
-let answerDst = "phone";      // "phone" (remote route) | "necklace" (LC3 downlink)
 
 /* ===================== helpers ===================== */
 
@@ -358,10 +338,9 @@ function setStatus(text, cls) {
 }
 
 function showConnectedUI(on) {
-  for (const id of ["stateCard", "modeCard", "captureCard", "controlCard", "settingsCard"]) {
+  for (const id of ["stateCard", "captureCard", "controlCard", "settingsCard"]) {
     $(id).classList.toggle("hide", !on);
   }
-  $("aiCard").classList.toggle("hide", !(on && mode === "ai"));
   $("connectBtn").disabled = on;
   $("disconnectBtn").disabled = !on;
 }
@@ -414,15 +393,6 @@ async function connect() {
     await micChar.startNotifications();
 
     await loadSettings();
-
-    // Unlock audio output while we still have the connect gesture; Android
-    // refuses to start an AudioContext without one.
-    if (!audioCtx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (AC) audioCtx = new AC();
-    }
-    if (audioCtx?.state === "suspended") await audioCtx.resume();
-
     await acquireWakeLock();
 
     FRAMES_PER_WRITE = 12;
@@ -441,13 +411,11 @@ function onDisconnected() {
   setStatus("Disconnected");
   showConnectedUI(false);
   releaseWakeLock();
-  closeSocket();
   logWarn("Link dropped.");
 }
 
 function disconnect() {
   releaseWakeLock();
-  closeSocket();
   if (device?.gatt?.connected) device.gatt.disconnect();
   else onDisconnected();
 }
@@ -502,7 +470,7 @@ function onStateNotify(ev) {
 /* ===================== microphone uplink ===================== */
 
 function resetCapture() {
-  frames = []; lastSeq = null; lostFrames = 0; aiSentFrames = 0;
+  frames = []; lastSeq = null; lostFrames = 0;
   updateCaptureUI();
 }
 
@@ -510,9 +478,7 @@ function updateCaptureUI() {
   $("capFrames").textContent = frames.length;
   $("capMs").textContent = (frames.length * FRAME_MS / 1000).toFixed(1) + "s";
   $("capLost").textContent = lostFrames;
-  const has = frames.length > 0 && !busy;
-  $("replayBtn").disabled = !has;
-  $("saveBtn").disabled = !has;
+  $("replayBtn").disabled = !(frames.length > 0 && !busy);
 }
 
 function onMicNotify(ev) {
@@ -525,25 +491,23 @@ function onMicNotify(ev) {
   // End of utterance is identified by len == 0, NEVER by total notification
   // length — the firmware already grew this marker from 7 to 12 bytes once.
   if (len === 0) {
-    let meta = null;
     if (dv.byteLength >= MIC_HEADER_LEN + END_META_LEN) {
-      meta = {
-        uid: dv.getUint16(MIC_HEADER_LEN, true),
-        attempt: dv.getUint8(MIC_HEADER_LEN + 2),
-        count: dv.getUint16(MIC_HEADER_LEN + 3, true),
-      };
-      const retry = meta.attempt ? " (RE-UPLOAD of an earlier utterance)" : "";
-      log(`End of utterance #${meta.uid}: attempt=${meta.attempt} ` +
-          `frames_sent=${meta.count}, received=${frames.length}${retry}`);
-      if (meta.count !== frames.length) {
-        lostFrames = meta.count - frames.length;
-        logWarn(`frame count mismatch: device sent ${meta.count}, we got ${frames.length}`);
+      const uid = dv.getUint16(MIC_HEADER_LEN, true);
+      const attempt = dv.getUint8(MIC_HEADER_LEN + 2);
+      const count = dv.getUint16(MIC_HEADER_LEN + 3, true);
+      const retry = attempt ? " (RE-UPLOAD of an earlier utterance)" : "";
+      log(`End of utterance #${uid}: attempt=${attempt} ` +
+          `frames_sent=${count}, received=${frames.length}${retry}`);
+      if (count !== frames.length) {
+        lostFrames = count - frames.length;
+        logWarn(`frame count mismatch: device sent ${count}, we got ${frames.length}`);
       }
     } else {
       log(`End of utterance (legacy ${dv.byteLength}-byte marker)`);
     }
     updateCaptureUI();
-    onUtteranceComplete();
+    if (frames.length) replay();
+    else log("Nothing captured — did the recording produce speech?");
     return;
   }
 
@@ -577,14 +541,6 @@ function onMicNotify(ev) {
     log(`… ${frames.length} frames (${frames.length * FRAME_MS} ms)`);
   }
   updateCaptureUI();
-
-  if (mode === "ai") streamFramesToAI();
-}
-
-function onUtteranceComplete() {
-  if (!frames.length) { log("Nothing captured — did the recording produce speech?"); return; }
-  if (mode === "loopback") replay();
-  else finishAITurn();
 }
 
 /* ===================== speaker downlink ===================== */
@@ -592,8 +548,8 @@ function onUtteranceComplete() {
 /* Whole LC3 frames only: spk_write_cb() rejects anything that is not a
  * multiple of 40 bytes and latches SPK_FRAMING. */
 async function writeSpk(bytes) {
-  // CTL/SPK are write-without-response; ATT errors are discarded by the stack
-  // and surface only through the device-state characteristic.
+  // SPK is write-without-response; ATT errors are discarded by the stack and
+  // surface only through the device-state characteristic.
   if (spkChar.writeValueWithoutResponse) await spkChar.writeValueWithoutResponse(bytes);
   else await spkChar.writeValue(bytes);
 }
@@ -601,15 +557,10 @@ async function writeSpk(bytes) {
 /**
  * Queue-backed paced writer for the SPK downlink.
  *
- * Both users share it because they differ only in when frames arrive:
- *  - loopback pushes a whole captured utterance up front and ends immediately;
- *  - an AI answer pushes frames as Gemini generates them and ends on
- *    turnComplete.
- *
- * Sending starts once a prime lead exists (or the producer has finished), then
- * paces against an absolute deadline. That is the same shape as the firmware's
- * audio_play_stream(): take a lead before the peripheral starts, then never let
- * per-iteration work accumulate into the period.
+ * Sending starts once a modest threshold is queued, then holds the device's
+ * estimated buffer occupancy under LEAD_CAP_FRAMES. That is the same shape as
+ * the firmware's audio_play_stream(): take a lead before the peripheral starts,
+ * then never let per-iteration work accumulate into the period.
  */
 class SpeakerStream {
   constructor(label) {
@@ -636,9 +587,9 @@ class SpeakerStream {
 
   _maybeStart() {
     if (this.started) return;
-    // Start on a full prime, or early if the producer is already finished.
-    const primeFrames = PRIME_BATCHES * FRAMES_PER_WRITE;
-    if (this.q.length >= primeFrames || this.done) {
+    // No large prime to accumulate first: the occupancy cap fills the device as
+    // fast as data allows and then holds it there.
+    if (this.q.length >= START_THRESHOLD_FRAMES || this.done) {
       this.started = true;
       this.finished = this._run();
     }
@@ -647,15 +598,13 @@ class SpeakerStream {
   async _run() {
     busy = true;
     updateCaptureUI();
-    const primeFrames = PRIME_BATCHES * FRAMES_PER_WRITE;
-    const start = performance.now();
-    let sent = 0;
+    let start = null;      // set on the first write: playback begins there
+    let sent = 0, peakLead = 0;
 
     try {
       for (;;) {
         // Prefer a full batch: packet rate, not bandwidth, is the binding
-        // constraint on the downlink. Wait briefly for the producer to catch
-        // up, but send short rather than let the device run dry.
+        // constraint on the downlink.
         const waitUntil = performance.now() + 200;
         while (this.q.length < FRAMES_PER_WRITE && !this.done &&
                performance.now() < waitUntil) {
@@ -672,17 +621,21 @@ class SpeakerStream {
         const batch = new Uint8Array(n * LC3_FRAME_BYTES);
         for (let k = 0; k < n; k++) batch.set(this.q[k], k * LC3_FRAME_BYTES);
 
-        // Absolute-deadline pacing after the prime, against FRAMES sent rather
-        // than batches — batch size changes under an MTU step-down, which would
-        // corrupt a batch-indexed deadline.
-        if (sent >= primeFrames) {
-          const deadline = start + (sent - primeFrames) * FRAME_MS * PACE_RATE;
-          const delay = deadline - performance.now();
-          if (delay > 0) await sleep(delay);
+        // Hold the device's estimated occupancy under the cap. `consumed` comes
+        // from absolute elapsed time since the first write, so this cannot
+        // accumulate error the way per-iteration sleeps do, and it self-corrects
+        // if a write stalls.
+        if (start !== null) {
+          const consumed = (performance.now() - start) / FRAME_MS;
+          const lead = sent - consumed;
+          if (lead > peakLead) peakLead = lead;
+          const over = lead + n - LEAD_CAP_FRAMES;
+          if (over > 0) await sleep(over * FRAME_MS);
         }
 
         try {
           await writeSpk(batch);
+          if (start === null) start = performance.now();
           this.q.splice(0, n);
           sent += n;
         } catch (e) {
@@ -709,10 +662,20 @@ class SpeakerStream {
         logWarn("zero-length end marker rejected (" + e.message + ") — idle timeout will end playback");
       }
 
-      const elapsed = ((performance.now() - start) / 1000).toFixed(2);
-      const audioS = (sent * FRAME_MS / 1000).toFixed(2);
-      logOk(`${this.label}: sent ${sent}/${this.pushed} frames in ${elapsed}s (audio is ${audioS}s)` +
-            (this.underruns ? `  [${this.underruns} starved waits]` : ""));
+      // Values before prose: this line is the evidence that pacing held. `rate`
+      // converges to 1.0x as the stream outgrows the lead; peak_lead is the
+      // estimated worst-case frames sitting in the device and must stay under
+      // DEVICE_BUFFER_FRAMES.
+      const elapsedS = start === null ? 0 : (performance.now() - start) / 1000;
+      const audioS = sent * FRAME_MS / 1000;
+      const rate = elapsedS > 0 ? (audioS / elapsedS) : 0;
+      logOk(`${this.label}: ${sent}/${this.pushed} frames, ${elapsedS.toFixed(2)}s ` +
+            `for ${audioS.toFixed(2)}s audio, rate=${rate.toFixed(2)}x, ` +
+            `peak_lead=${Math.round(peakLead)}/${DEVICE_BUFFER_FRAMES}` +
+            (this.underruns ? `, ${this.underruns} starved` : ""));
+      if (peakLead > DEVICE_BUFFER_FRAMES) {
+        logWarn("lead exceeded the device buffer — frames were discarded");
+      }
     } finally {
       busy = false;
       updateCaptureUI();
@@ -722,6 +685,12 @@ class SpeakerStream {
 
 async function replay() {
   if (busy || !frames.length) return;
+  if (deviceState && (deviceState.flags & CTL_REMOTE_AUDIO)) {
+    // spk_write_cb() discards every frame while this route is on, and the only
+    // symptom is silence plus a latched SPK_DISCARDED.
+    logWarn("Remote audio route is ON — the device will discard this playback. " +
+            "Turn it off in Controls.");
+  }
   const s = new SpeakerStream("Loopback");
   log(`Playing back ${frames.length} frames (${frames.length * FRAME_MS} ms)…`);
   s.push(frames.slice());
@@ -741,7 +710,7 @@ async function writeCtl(commandBits) {
 async function setRoute(remote) {
   try {
     await ctlChar.writeValue(new Uint8Array([remote ? CTL_REMOTE_AUDIO : 0]));
-    log(`Remote audio route ${remote ? "ENABLED (answer plays on this phone)" : "disabled (necklace speaker)"}`);
+    log(`Remote audio route ${remote ? "ENABLED — loopback will be discarded" : "disabled (necklace speaker)"}`);
   } catch (e) {
     logErr("Route write failed: " + e.message);
     $("routeSw").checked = !remote;
@@ -795,439 +764,11 @@ async function applySettings() {
   }
 }
 
-/* ===================== .lc3 export ===================== */
-
-/* Writes the container that liblc3's own `dlc3` reads, so a capture can be
- * decoded on a PC:  dlc3 -i capture.lc3 -o capture.wav
- * Layout from modules/lib/liblc3/tools/lc3bin.c — 18-byte LE header, then each
- * frame prefixed with its u16 length. */
-function buildLc3File(frameList) {
-  const HDR = 18;
-  const nsamples = frameList.length * (SAMPLE_RATE * FRAME_MS / 1000);
-  const out = new Uint8Array(HDR + frameList.length * (2 + LC3_FRAME_BYTES));
-  const dv = new DataView(out.buffer);
-  dv.setUint16(0,  0xCC1C, true);          // file_id
-  dv.setUint16(2,  HDR, true);             // header_size
-  dv.setUint16(4,  SAMPLE_RATE / 100, true);
-  dv.setUint16(6,  BITRATE / 100, true);
-  dv.setUint16(8,  1, true);               // channels
-  dv.setUint16(10, (FRAME_MS * 1000) / 10, true); // frame_10us
-  dv.setUint16(12, 0, true);               // epmode
-  dv.setUint16(14, nsamples & 0xffff, true);
-  dv.setUint16(16, nsamples >>> 16, true);
-
-  let p = HDR;
-  for (const f of frameList) {
-    dv.setUint16(p, f.length, true); p += 2;
-    out.set(f, p); p += f.length;
-  }
-  return out;
-}
-
-function saveCapture() {
-  if (!frames.length) return;
-  const blob = new Blob([buildLc3File(frames)], { type: "application/octet-stream" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `necklace-${new Date().toISOString().replace(/[:.]/g, "-")}.lc3`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-  logOk(`Saved ${frames.length} frames — decode with:  dlc3 -i <file>.lc3 -o out.wav`);
-}
-
-/* =====================================================================
- * AI MODE — gated on an LC3 sidecar, in two independent halves.
- *
- * No browser ships an LC3 codec (WebCodecs covers opus/aac/mp3/flac/pcm), so
- * both directions depend on a script dropped next to this file:
- *
- *   window.NecklaceLC3 = {
- *     decodeFrame(Uint8Array(40))  -> Int16Array(160),   // required for AI mode
- *     encodeFrame(Int16Array(160)) -> Uint8Array(40),    // optional
- *   }
- *
- * DECODE is what AI mode needs at all: the uplink is LC3 and Gemini needs
- * 16 kHz PCM. With decode alone the answer plays on THIS PHONE over WebAudio,
- * via the remote-audio route, and the necklace speaker stays silent.
- *
- * ENCODE is what puts the answer on the NECKLACE speaker. It also requires a
- * rate conversion: Gemini Live returns 24 kHz PCM and the device is fixed at
- * 16 kHz, so encoding Gemini's samples as-is would play ~50% slow.
- *
- * liblc3 is vendored at modules/lib/liblc3 and builds to WASM with emscripten:
- *     emcc -O3 -I include src/*.c \
- *          -s EXPORTED_FUNCTIONS=_lc3_decoder_size,_lc3_setup_decoder,_lc3_decode,\
- * _lc3_encoder_size,_lc3_setup_encoder,_lc3_encode,_lc3_frame_samples,_malloc,_free \
- *          -s MODULARIZE=1 -o lc3-decoder.js
- * ===================================================================== */
-
-let lc3 = null; // set by the optional sidecar
-
-function lc3CanDecode() { return typeof lc3?.decodeFrame === "function"; }
-function lc3CanEncode() { return typeof lc3?.encodeFrame === "function"; }
-function lc3Available() { return lc3CanDecode(); }
-
-/* ---- 24 kHz -> 16 kHz streaming resampler -------------------------------
- * Windowed-sinc interpolation with a normalised kernel, carrying its history
- * and fractional phase across calls. Stateful on purpose: Gemini delivers audio
- * in arbitrary chunks, and resampling each one independently would put a
- * discontinuity at every boundary — audible as a click per chunk.
- *
- * The kernel cutoff is set to the rate ratio, which is what suppresses the
- * 8-12 kHz band that would otherwise alias into the 16 kHz output.
- */
-class Resampler {
-  constructor(inRate, outRate, half = 12) {
-    this.ratio = inRate / outRate;
-    this.half = half;
-    this.cutoff = Math.min(1, outRate / inRate);
-    this.buf = new Float32Array(0);
-    this.pos = 0;
-  }
-
-  static sinc(x) {
-    if (Math.abs(x) < 1e-9) return 1;
-    const p = Math.PI * x;
-    return Math.sin(p) / p;
-  }
-
-  _tap(buf, p) {
-    const i0 = Math.floor(p), frac = p - i0;
-    let acc = 0, norm = 0;
-    for (let k = -this.half + 1; k <= this.half; k++) {
-      const idx = i0 + k;
-      if (idx < 0 || idx >= buf.length) continue;
-      const x = k - frac;
-      // Hann taper over the kernel support, then normalise by the weight sum so
-      // gain stays flat regardless of where the fractional phase lands.
-      const w = Resampler.sinc(x * this.cutoff) *
-                0.5 * (1 + Math.cos(Math.PI * x / this.half));
-      acc += buf[idx] * w;
-      norm += w;
-    }
-    return norm ? acc / norm : 0;
-  }
-
-  process(input) {
-    const buf = new Float32Array(this.buf.length + input.length);
-    buf.set(this.buf);
-    buf.set(input, this.buf.length);
-
-    const out = [];
-    let p = this.pos;
-    const limit = buf.length - this.half;   // keep `half` samples of lookahead
-    while (p < limit) { out.push(this._tap(buf, p)); p += this.ratio; }
-
-    // Retain enough history for the kernel's left half on the next call.
-    const keepFrom = Math.max(0, Math.floor(p) - this.half);
-    this.buf = buf.slice(keepFrom);
-    this.pos = p - keepFrom;
-    return Float32Array.from(out);
-  }
-}
-
-function loadLc3Sidecar() {
-  return new Promise((resolve) => {
-    const s = document.createElement("script");
-    s.src = "./lc3-decoder.js";
-    s.onload = () => {
-      lc3 = window.NecklaceLC3 || null;
-      if (lc3CanDecode()) {
-        logOk("LC3 sidecar loaded — decode" +
-              (lc3CanEncode() ? " + encode (necklace playback available)."
-                              : " only (answer plays on this phone)."));
-      } else if (lc3) {
-        logErr("Sidecar loaded but exports no decodeFrame() — AI mode stays off.");
-      }
-      resolve();
-    };
-    s.onerror = () => resolve(); // absent is the normal case
-    document.head.appendChild(s);
-  });
-}
-
-function renderAIHelp() {
-  const el = $("aiHelp");
-  const ok = lc3CanDecode();
-  // Rebuild the whole class list from state, including the hide flag: assigning
-  // className while leaving `hide` out is what made both mode notes show at once.
-  el.className = "note" + (ok ? "" : " err") + (mode === "ai" ? "" : " hide");
-  if (ok) {
-    el.innerHTML = "<b>AI mode.</b> Uplink is decoded to PCM and streamed to Gemini. " +
-      (lc3CanEncode()
-        ? "Encoder present — the answer can play on either the phone or the necklace."
-        : "<b>Decoder only:</b> the answer can play on this phone, but not on the " +
-          "necklace. Add <code>encodeFrame()</code> to the sidecar for that.");
-  } else {
-    el.innerHTML = "<b>AI mode is unavailable.</b> The necklace uplink is " +
-      "<b>LC3</b>, not PCM, and no browser ships an LC3 codec. Supply " +
-      "<code>lc3-decoder.js</code> next to this file exporting " +
-      "<code>window.NecklaceLC3.decodeFrame()</code> — see the comment in this " +
-      "file for the emscripten command. Loopback mode works without it.";
-  }
-}
-
-function renderDestination() {
-  const canEnc = lc3CanEncode();
-  $("dstPhone").setAttribute("aria-pressed", String(answerDst === "phone"));
-  $("dstNecklace").setAttribute("aria-pressed", String(answerDst === "necklace"));
-  $("dstNecklace").disabled = !canEnc;
-
-  const note = $("dstNote");
-  if (!canEnc) {
-    note.className = "note err";
-    note.innerHTML = "<b>Necklace playback needs an encoder.</b> The sidecar " +
-      "exports <code>decodeFrame()</code> but not <code>encodeFrame()</code>.";
-  } else if (answerDst === "necklace") {
-    note.className = "note";
-    note.innerHTML = "Answer is resampled 24 kHz &rarr; 16 kHz, LC3-encoded and " +
-      "streamed to the necklace speaker as it is generated.";
-  } else {
-    note.className = "note hide";
-  }
-}
-
-function setAnswerDst(dst) {
-  if (dst === "necklace" && !lc3CanEncode()) {
-    logWarn("No LC3 encoder in the sidecar — answer stays on this phone.");
-    return;
-  }
-  answerDst = dst;
-  renderDestination();
-  // The route decides whether the device expects a downlink at all: with remote
-  // audio ON, spk_write_cb() discards every frame we send.
-  if (mode === "ai" && device?.gatt?.connected) {
-    const remote = dst === "phone";
-    $("routeSw").checked = remote;
-    setRoute(remote);
-  }
-  log(`AI answer destination: ${dst === "phone" ? "this phone" : "necklace speaker"}`);
-}
-
-function setMode(next) {
-  mode = next;
-  $("modeLoopback").setAttribute("aria-pressed", String(next === "loopback"));
-  $("modeAI").setAttribute("aria-pressed", String(next === "ai"));
-  $("loopbackHelp").classList.toggle("hide", next !== "loopback");
-  $("aiCard").classList.toggle("hide", !(next === "ai" && device?.gatt?.connected));
-  renderAIHelp();
-  renderDestination();
-
-  if (next === "ai") {
-    // Route follows the destination: remote ON keeps the answer here, remote
-    // OFF is what lets a downlink reach the speaker.
-    if (device?.gatt?.connected) {
-      const remote = answerDst === "phone";
-      $("routeSw").checked = remote;
-      setRoute(remote);
-    }
-    if (lc3CanDecode()) openSocket();
-  } else {
-    closeSocket();
-    // Loopback drives the onboard speaker, so the downlink must not be discarded.
-    if (device?.gatt?.connected) { $("routeSw").checked = false; setRoute(false); }
-  }
-  log(`Mode: ${next}`);
-}
-
-/* ---- answer playback (device path) ----
- * Frames are produced as Gemini generates them and handed straight to a
- * SpeakerStream, which starts once it holds a prime lead. Buffering the whole
- * turn first would be simpler but risks the device's response timeout
- * (5-30 s, default 15 s): that window closes on the FIRST downlink frame, so
- * starting early is what keeps a long answer from timing out.
- */
-let answerStream = null, answerResampler = null, answerAcc = new Float32Array(0);
-let answerEncodeErrs = 0;
-
-function beginAnswer() {
-  if (answerStream) return;
-  answerStream = new SpeakerStream("AI answer");
-  answerResampler = null;
-  answerAcc = new Float32Array(0);
-  answerEncodeErrs = 0;
-  log("Answer incoming — encoding to the necklace speaker.");
-}
-
-function onAnswerPcm(pcm, rate) {
-  beginAnswer();
-  if (!answerResampler) answerResampler = new Resampler(rate, SAMPLE_RATE);
-
-  const f32 = new Float32Array(pcm.length);
-  for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768;
-  const res = answerResampler.process(f32);
-
-  const merged = new Float32Array(answerAcc.length + res.length);
-  merged.set(answerAcc);
-  merged.set(res, answerAcc.length);
-
-  const out = [];
-  let off = 0;
-  for (; off + AUDIO_FRAME_SAMPLES <= merged.length; off += AUDIO_FRAME_SAMPLES) {
-    const frame = new Int16Array(AUDIO_FRAME_SAMPLES);
-    for (let i = 0; i < AUDIO_FRAME_SAMPLES; i++) {
-      const s = Math.max(-1, Math.min(1, merged[off + i]));
-      frame[i] = s < 0 ? s * 32768 : s * 32767;
-    }
-    try {
-      out.push(lc3.encodeFrame(frame));
-    } catch (e) {
-      if (!answerEncodeErrs++) logErr("LC3 encode failed: " + e.message);
-    }
-  }
-  answerAcc = merged.slice(off);
-  if (out.length) answerStream.push(out);
-}
-
-async function endAnswer() {
-  if (!answerStream) return;
-  // Pad the trailing partial frame: LC3 is fixed-size, so a short tail cannot
-  // be sent as-is and dropping it would clip the last word.
-  if (answerAcc.length) {
-    const frame = new Int16Array(AUDIO_FRAME_SAMPLES);
-    for (let i = 0; i < answerAcc.length; i++) {
-      const s = Math.max(-1, Math.min(1, answerAcc[i]));
-      frame[i] = s < 0 ? s * 32768 : s * 32767;
-    }
-    try { answerStream.push([lc3.encodeFrame(frame)]); } catch { /* already counted */ }
-  }
-  const s = answerStream;
-  answerStream = null;
-  answerAcc = new Float32Array(0);
-  if (answerEncodeErrs > 1) logWarn(`${answerEncodeErrs} frames failed to encode`);
-  await s.end();
-}
-
-/* ---- Gemini Live transport ----
- * NOTE: unverified against a live endpoint — the Live API wire format and model
- * names move. If the socket opens but nothing comes back, check the setup
- * message and `realtimeInput` shape against current Gemini docs first. */
-function openSocket() {
-  const key = $("apiKey").value.trim();
-  if (!key) { logWarn("Enter a Gemini API key to use AI mode."); return; }
-  if (ws) return;
-
-  const model = $("model").value.trim() || "gemini-2.0-flash-live-001";
-  const url = "wss://generativelanguage.googleapis.com/ws/" +
-    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" +
-    encodeURIComponent(key);
-
-  ws = new WebSocket(url);
-  ws.binaryType = "arraybuffer";
-
-  ws.onopen = () => {
-    ws.send(JSON.stringify({
-      setup: { model: `models/${model}`, generationConfig: { responseModalities: ["AUDIO"] } },
-    }));
-    logOk("Gemini socket open.");
-  };
-  ws.onmessage = async (ev) => {
-    let text = ev.data;
-    if (text instanceof ArrayBuffer) text = new TextDecoder().decode(text);
-    else if (text instanceof Blob) text = await text.text();
-    let msg; try { msg = JSON.parse(text); } catch { return; }
-
-    if (msg.setupComplete) { wsReady = true; log("Gemini session ready."); return; }
-    const parts = msg.serverContent?.modelTurn?.parts || [];
-    for (const p of parts) {
-      if (!p.inlineData?.data) continue;
-      const pcm = decodeB64Pcm(p.inlineData.data);
-      if (!pcm) continue;
-      const m = /rate=(\d+)/.exec(p.inlineData.mimeType || "");
-      const rate = m ? parseInt(m[1], 10) : 24000;   // Gemini Live returns 24 kHz
-      if (answerDst === "necklace" && lc3CanEncode()) onAnswerPcm(pcm, rate);
-      else playPcm(pcm, rate);
-    }
-    if (msg.serverContent?.turnComplete) {
-      log("Gemini turn complete.");
-      if (answerDst === "necklace") endAnswer();
-    }
-  };
-  ws.onerror = () => logErr("Gemini socket error.");
-  ws.onclose = (e) => { ws = null; wsReady = false; log(`Gemini socket closed (${e.code}).`); };
-}
-
-function closeSocket() {
-  if (ws) { try { ws.close(); } catch {} ws = null; }
-  wsReady = false;
-}
-
-function streamFramesToAI() {
-  if (!wsReady || !lc3Available() || ws?.readyState !== WebSocket.OPEN) return;
-  // Decode only what has not been sent yet, so this can run per notification.
-  const pending = frames.slice(aiSentFrames);
-  if (!pending.length) return;
-  aiSentFrames = frames.length;
-
-  const pcm = new Int16Array(pending.length * 160);
-  pending.forEach((f, i) => {
-    try { pcm.set(lc3.decodeFrame(f), i * 160); }
-    catch (e) { logErr("LC3 decode failed: " + e.message); }
-  });
-
-  ws.send(JSON.stringify({
-    realtimeInput: {
-      mediaChunks: [{ data: b64(new Uint8Array(pcm.buffer)), mimeType: "audio/pcm;rate=16000" }],
-    },
-  }));
-}
-
-function finishAITurn() {
-  streamFramesToAI();
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
-    log("Utterance sent to Gemini; waiting for the answer.");
-  }
-  aiSentFrames = 0;
-}
-
-function b64(bytes) {
-  let s = "";
-  const CH = 0x8000; // chunked: String.fromCharCode(...huge) blows the stack
-  for (let i = 0; i < bytes.length; i += CH) {
-    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
-  }
-  return btoa(s);
-}
-
-function decodeB64Pcm(base64Data) {
-  const bin = atob(base64Data);
-  // Int16Array over the buffer needs an even length; a chunk boundary can split
-  // a sample, so drop the odd trailing byte rather than throwing.
-  const usable = bin.length & ~1;
-  if (!usable) return null;
-  const bytes = new Uint8Array(usable);
-  for (let i = 0; i < usable; i++) bytes[i] = bin.charCodeAt(i);
-  return new Int16Array(bytes.buffer);
-}
-
-/* Phone-side playback. Scheduled back-to-back on a running cursor so
- * consecutive chunks do not overlap or gap. */
-function playPcm(pcm, rate) {
-  if (!audioCtx) return;
-  const buf = audioCtx.createBuffer(1, pcm.length, rate);
-  const ch = buf.getChannelData(0);
-  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
-
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  const now = audioCtx.currentTime;
-  if (playHead < now) playHead = now + 0.05;
-  src.start(playHead);
-  playHead += buf.duration;
-}
-
 /* ===================== wiring ===================== */
 
 $("connectBtn").onclick = () => { resetCapture(); connect(); };
 $("disconnectBtn").onclick = disconnect;
-$("modeLoopback").onclick = () => setMode("loopback");
-$("modeAI").onclick = () => setMode("ai");
-$("dstPhone").onclick = () => setAnswerDst("phone");
-$("dstNecklace").onclick = () => setAnswerDst("necklace");
 $("replayBtn").onclick = replay;
-$("saveBtn").onclick = saveCapture;
 $("clearLog").onclick = () => { $("log").innerHTML = ""; };
 $("applyBtn").onclick = applySettings;
 $("routeSw").onchange = (e) => setRoute(e.target.checked);
@@ -1245,7 +786,7 @@ $("volSlider").oninput = (e) => { $("volValue").textContent = e.target.value + "
 $("toSlider").oninput  = (e) => { $("toValue").textContent = (e.target.value / 1000) + "s"; };
 
 /* ---- startup checks ---- */
-(async function init() {
+(function init() {
   const problems = [];
   // Checked separately from isSecureContext: Chrome/Edge classify file:// AS a
   // secure context, so that test passes and requestDevice() then fails anyway
@@ -1268,11 +809,7 @@ $("toSlider").oninput  = (e) => { $("toValue").textContent = (e.target.value / 1
     $("unsupportedMsg").innerHTML = problems.join("<br><br>");
     $("connectBtn").disabled = true;
   }
-
-  await loadLc3Sidecar();
-  renderAIHelp();
-  renderDestination();
-  log("Ready. Serve over HTTPS, connect, then double-tap the necklace.");
+  log("Ready. Connect, then double-tap the necklace.");
 })();
 </script>
 </body>
