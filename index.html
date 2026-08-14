@@ -191,10 +191,13 @@
   </div>
   <div class="field">
     <label for="micProfile">Mic profile</label>
+    <!-- Values are indices into profiles[] in src/audio_profile.c, which is the
+         wire format: entries may be appended but never reordered. -->
     <select id="micProfile">
       <option value="0">0 — quiet</option>
       <option value="1">1 — outdoor</option>
       <option value="2">2 — car</option>
+      <option value="3">3 — raw (DSP bypassed, diagnostic)</option>
     </select>
   </div>
   <div class="stack" style="margin-top:14px">
@@ -744,7 +747,12 @@ async function applySettings() {
   if (!settings) return;
   const vol = Math.min(100, Math.max(0, parseInt($("volSlider").value, 10)));
   const to  = Math.min(30000, Math.max(5000, parseInt($("toSlider").value, 10)));
-  const prof = Math.min(2, Math.max(0, parseInt($("micProfile").value, 10)));
+  // Bound from the option list, never a literal. The firmware makes the same
+  // point in ble_settings.c: it used to hardcode `MIC_PROFILE_MAX 2U`, so
+  // appending a fourth profile to src/audio_profile.c did nothing — the write
+  // was rejected as out of range and the profile was unreachable.
+  const profMax = $("micProfile").options.length - 1;
+  const prof = Math.min(profMax, Math.max(0, parseInt($("micProfile").value, 10)));
 
   const buf = new ArrayBuffer(5);
   const dv = new DataView(buf);
