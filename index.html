@@ -88,7 +88,12 @@
 
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; }
   .stat { background: var(--card-2); border-radius: 9px; padding: 9px 10px; }
-  .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 700; }
+  /* overflow-wrap, because the longest state name (WAITING_RESPONSE) is wider
+     than the 88px minimum column and was being painted straight through the
+     tile edge. Wrapping is right rather than shrinking the font: the tile is
+     a glanceable readout and a second line costs nothing here. */
+  .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums;
+            font-weight: 700; overflow-wrap: anywhere; }
   .stat span { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
 
   .note {
@@ -109,6 +114,31 @@
   #log .e { color: var(--err); }
   #log .w { color: var(--warn); }
   #log .g { color: var(--accent); }
+  .note.ok { border-left-color: var(--accent); background: #14241b; border-color: #234a33; }
+
+  /* Passkey display. Large and selectable because the operator is copying it
+     into an OS dialog under time pressure - Windows cancels the pairing prompt
+     after about 30 s. */
+  .passkey {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; background: #0d1013; border: 1px solid var(--line);
+    border-radius: 9px; padding: 12px 14px; margin-top: 10px;
+  }
+  .passkey span { font-size: 12px; text-transform: uppercase; letter-spacing: .9px; color: var(--dim); }
+  .passkey b {
+    font: 600 26px/1 ui-monospace, "Roboto Mono", Menlo, monospace;
+    letter-spacing: 3px; color: var(--accent);
+    user-select: all; -webkit-user-select: all;
+  }
+
+  .steps { margin: 12px 0 0; padding-left: 20px; font-size: 13px; color: #c6d0dc; }
+  .steps li { margin-bottom: 7px; }
+  .steps li:last-child { margin-bottom: 0; }
+  .steps code { background: #0d1013; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  .stat b.bad { color: var(--err); }
+  .stat b.good { color: var(--accent); }
+
   .hide { display: none !important; }
 </style>
 </head>
@@ -134,6 +164,41 @@
     Keep this tab in the foreground. Android throttles background timers, which
     stalls the paced speaker downlink mid-playback.
   </div>
+  <div class="note">
+    <b>Pairing.</b> A stock image requires an encrypted link and Web Bluetooth
+    cannot pair, so the bond has to come from the operating system. Connect
+    anyway — the console detects the requirement and walks you through it.
+  </div>
+</section>
+
+<!-- Shown only when a connection attempt is refused for lack of encryption.
+     Populated at runtime by showBondHelp(), because the steps differ per
+     platform and a static list would be wrong on two of the three. -->
+<section id="bondCard" class="hide">
+  <h2>Pairing required</h2>
+  <div class="note err">
+    The necklace refused an unencrypted link. Web Bluetooth has no
+    passkey-entry UI and no API to trigger one, so the bond has to be created by
+    the operating system. You do this once — both sides persist it, and the
+    necklace keeps it across the reboot that every wake from deep sleep performs.
+  </div>
+  <div class="passkey"><span>Passkey</span><b id="passkeyVal">—</b></div>
+  <ol class="steps" id="bondSteps"></ol>
+  <div class="stack" style="margin-top:12px">
+    <button id="osSettingsBtn">Open Bluetooth settings</button>
+    <button id="retryBtn" class="primary">Retry connection</button>
+  </div>
+  <div class="note">
+    <b>The console has released the link</b> so the OS can reach the device. The
+    necklace allows one connection at a time, so holding this one open would
+    block the pairing you are about to do — and the firmware would drop it
+    anyway after its security timeout.
+  </div>
+  <div class="note">
+    Bench alternative: flash an image built with
+    <code>overlay-ble-open.conf</code>, which removes the requirement. That
+    image has a live microphone readable by anything in range — bench, not body.
+  </div>
 </section>
 
 <section id="stateCard" class="hide">
@@ -142,6 +207,7 @@
     <div class="stat"><b id="stState">—</b><span>State</span></div>
     <div class="stat"><b id="stAck">—</b><span>Cmd Ack</span></div>
     <div class="stat"><b id="stErr">—</b><span>Last Error</span></div>
+    <div class="stat"><b id="stSec">—</b><span>Link</span></div>
   </div>
   <div class="note hide" id="stErrNote"></div>
 </section>
@@ -228,9 +294,17 @@
  * opus/aac/mp3/flac/pcm only), so anything that had to interpret the audio —
  * rather than relay it — could not work in a browser at all.
  *
- * Protocol mirrors src/ble.c, include/ble.h and include/ble_settings.h.
- * scripts/ble_loopback.py is the reference implementation; if this file and
- * that one ever disagree, that one is right.
+ * Protocol mirrors src/ble.c, include/ble.h and include/ble_settings.h, which
+ * are the authority: if this file and the firmware ever disagree, the firmware
+ * is right.
+ *
+ * THIS FILE IS THE ACTIVE ROUTE TEST until the mobile app lands. The Python
+ * loopback script that used to hold that role was removed on 2026-08-20 - it
+ * needed its own venv, it could not be run from a phone (which is where the
+ * product's peer actually is), and the WinRT stack it ran on self-limited
+ * write-without-response in a way that hid a real pacing bug (see the downlink
+ * pacing note below). Keep this file in step with the firmware by hand; nothing
+ * in the build will catch drift.
  * ===================================================================== */
 
 const UUID_SERVICE  = "12345678-1234-5678-1234-56789abcdef0";
@@ -259,6 +333,22 @@ const CTL_SPEAKER_TEST  = 0x04;
 // or it silently switches the speaker back on.
 const CTL_PERSISTENT_MASK = CTL_REMOTE_AUDIO;
 
+/* Device-state flags (struct ble_device_state.flags). */
+const DEV_FLAG_REMOTE_AUDIO   = 0x01;
+const DEV_FLAG_MIC_SUBSCRIBED = 0x02;
+/* Set when the link is ACTUALLY encrypted, not when the build merely requires
+ * it. Reading it clear means exactly one thing: this is an open bench image
+ * built with overlay-ble-open.conf. On a stock image the bit can never be
+ * observed clear, because the characteristic carrying it is itself unreadable
+ * until the link is secure. */
+const DEV_FLAG_SECURE         = 0x04;
+
+/* CONFIG_AI_BT_FIXED_PASSKEY. A duplicate of a firmware Kconfig default, so it
+ * is exactly the kind of thing that drifts - nothing in the build checks it.
+ * If the OS pairing dialog rejects this number, read the real one out of
+ * Kconfig or off the boot log line rather than trusting this file. */
+const FIXED_PASSKEY = "472913";
+
 const STATE_NAMES = ["IDLE", "LISTENING", "STREAMING", "DRAINING",
                      "WAITING_RESPONSE", "PLAYBACK", "SLEEP"];
 const DEVICE_ERRORS = [
@@ -285,11 +375,12 @@ let FRAMES_PER_WRITE = 12;
  *
  * Two things this replaces, both measured wrong on hardware (254 frames
  * delivered in ~600 ms against a 112-frame buffer):
- *  - An unpaced "prime" of 7 x 12 = 84 frames. Those constants come from
- *    scripts/ble_loopback.py, where they were safe only because the WinRT
- *    stack self-limited write-without-response to ~12.5/s. Android has no such
- *    ceiling, so the prime arrived almost instantly and put 84 of the 112
- *    frames into the device before pacing began.
+ *  - An unpaced "prime" of 7 x 12 = 84 frames. Those constants were inherited
+ *    from the old Python loopback script, where they were safe only because the
+ *    WinRT stack self-limited write-without-response to ~12.5/s. Android has no
+ *    such ceiling, so the prime arrived almost instantly and put 84 of the 112
+ *    frames into the device before pacing began. That hidden dependency on one
+ *    host stack's throttling is part of why the script was retired.
  *  - A 0.95 pace rate, i.e. deliberately running 5% fast. That is unbounded
  *    drift: the excess lead grows with the length of the response, so a long
  *    one overflows no matter how deep the buffer is.
@@ -314,6 +405,13 @@ let settings = null;          // {remoteAudio, responseTimeoutMs, micProfile, sp
 let deviceState = null;
 let busy = false;
 let wakeLock = null;
+/* We dropped the link ourselves so the OS could pair; the disconnect that
+ * follows is expected and must not be reported as a fault. */
+let bondPending = false;
+/* A successful read of the STATE characteristic on this link. Distinguishes
+ * a drop that happened mid-session from one that happened before the link
+ * was ever usable, which is almost always the firmware security timeout. */
+let linkProbed = false;
 
 /* ===================== helpers ===================== */
 
@@ -366,10 +464,143 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
+/* ===================== link security / OS bonding ===================== */
+
+/* Was this failure the encryption requirement, or something else?
+ *
+ * There is no clean signal. Web Bluetooth deliberately does not surface ATT
+ * error codes to JS, so an "Insufficient Authentication" (ATT 0x05) arrives as
+ * a DOMException whose name and message vary by browser, OS and even by which
+ * operation tripped it. Observed forms:
+ *
+ *   NotSupportedError  "GATT operation failed for unknown reason"   Windows
+ *   SecurityError      "GATT operation not authorized"              some builds
+ *   NetworkError       "GATT Server is disconnected..."             device drops us
+ *
+ * The NotSupportedError wording is the awkward one: it is genuinely generic and
+ * this matcher will claim some non-security failures. That is the right way to
+ * be wrong here - the bonding panel it produces is advice, not an action, and
+ * "pair first" is the correct first guess for a device that has just refused a
+ * plain read on a characteristic it advertises. */
+function isSecurityError(e) {
+  const s = (e && e.name ? e.name : "") + " " + (e && e.message ? e.message : "");
+  return /not authorized|NotSupportedError|SecurityError|authentic|encrypt|insufficient/i.test(s);
+}
+
+/* Per-platform pairing steps. A single static list would be wrong on two of the
+ * three platforms this console gets used from, and a wrong instruction is worse
+ * than none when the operator is already looking at a failure. */
+function bondSteps() {
+  const ua = navigator.userAgent;
+  if (/Windows/i.test(ua)) {
+    return [
+      'Open <b>Settings &rarr; Bluetooth &amp; devices</b> (the button below opens it directly).',
+      'Choose <b>Add device &rarr; Bluetooth</b>.',
+      'Pick <b>AI Necklace</b> from the list. It has to be advertising — if it is asleep, double-tap it first.',
+      'Type the passkey above when Windows asks, then <b>Connect</b>.',
+      'Come back here and press <b>Retry connection</b>.',
+    ];
+  }
+  if (/Android/i.test(ua)) {
+    return [
+      'Open <b>Settings &rarr; Connected devices &rarr; Pair new device</b>.',
+      'Pick <b>AI Necklace</b>. Double-tap the necklace first if it is not listed — it stops advertising when asleep.',
+      'Enter the passkey above.',
+      'Return to this tab and press <b>Retry connection</b>.',
+      'If Android pairs and then immediately shows the device as disconnected, that is normal — it drops the link once bonded and this console will reconnect.',
+    ];
+  }
+  if (/Mac OS X|CrOS/i.test(ua)) {
+    return [
+      'Open the system Bluetooth settings.',
+      'Pair with <b>AI Necklace</b>, entering the passkey above.',
+      'Return here and press <b>Retry connection</b>.',
+      'macOS hides some LE peripherals from its Bluetooth pane. If it never appears, use a Windows or Android host, or flash the open bench image.',
+    ];
+  }
+  return [
+    'Pair <b>AI Necklace</b> from the system Bluetooth settings, using the passkey above.',
+    'Return here and press <b>Retry connection</b>.',
+  ];
+}
+
+/* Hand the link back before showing the instructions.
+ *
+ * Not cosmetic. CONFIG_BT_MAX_CONN=1: the necklace accepts exactly one
+ * connection, and it stops advertising while that connection is held. Leaving
+ * this one open would mean the OS pairing flow the operator is being sent to
+ * cannot see or reach the device at all - the console would be blocking the
+ * exact operation it is asking for. The firmware would also drop us on its own
+ * after CONFIG_AI_BT_SECURITY_TIMEOUT_MS, which produces a confusing second
+ * error on top of the first. */
+function showBondHelp() {
+  if (device && device.gatt && device.gatt.connected) {
+    bondPending = true;
+    log("Releasing the link so the OS can reach the device for pairing.");
+    device.gatt.disconnect();
+  }
+  $("passkeyVal").textContent = FIXED_PASSKEY;
+  $("bondSteps").innerHTML = bondSteps().map((s) => "<li>" + s + "</li>").join("");
+  $("bondCard").classList.remove("hide");
+  setStatus("Pairing required", "err");
+}
+
+function hideBondHelp() {
+  $("bondCard").classList.add("hide");
+}
+
+/* Windows exposes a URI for its Bluetooth pane; nothing equivalent is reachable
+ * from a browser on Android or macOS, and a link that silently does nothing is
+ * worse than a button that says so. */
+function openOsBluetoothSettings() {
+  if (/Windows/i.test(navigator.userAgent)) {
+    window.open("ms-settings:bluetooth", "_blank");
+    log("Asked Windows to open Bluetooth settings.");
+  } else {
+    logWarn("No way to open system Bluetooth settings from a browser on this "
+            + "platform — open it by hand and follow the steps above.");
+  }
+}
+
+/* The first value access on a fresh link, and the whole point is that it is a
+ * READ of a characteristic we would have to read anyway.
+ *
+ * Discovery is not permission-checked in GATT: getPrimaryService() and
+ * getCharacteristic() both succeed over an unencrypted link, so the old flow
+ * got all the way to subscribing MIC before anything failed, and the failure
+ * surfaced from a CCC write - which reads as "notifications are broken", not as
+ * "you are not paired". Probing with a plain read puts the failure on the
+ * cheapest possible operation and makes it unambiguous. */
+async function probeLinkSecurity() {
+  const dv = await stateChar.readValue();
+  linkProbed = true;
+  onStateNotify({ target: { value: dv } });
+  const secure = dv.byteLength >= 2 && (dv.getUint8(1) & DEV_FLAG_SECURE) !== 0;
+  if (!secure) {
+    /* The read succeeded but the link is not encrypted, which on a stock image
+     * is impossible - so this is an open bench build. Worth shouting about:
+     * its microphone is readable by anything in range. */
+    logWarn("OPEN IMAGE: the AI service is unencrypted (built with "
+            + "overlay-ble-open.conf). Fine on a bench, never on a body.");
+  } else {
+    logOk("Link is encrypted — OS bond in place.");
+  }
+  return secure;
+}
+
 /* ===================== connection ===================== */
 
+/* Device selection and link bring-up are separate on purpose.
+ *
+ * A failed security probe has to be retryable WITHOUT a second chooser prompt:
+ * requestDevice() needs a user gesture and shows an OS picker, and making the
+ * operator walk that picker again after they have just paired in system
+ * settings is both annoying and misleading - it suggests the pairing did not
+ * take. Keeping `device` across the failure lets Retry go straight to
+ * gatt.connect(). */
 async function connect() {
   try {
+    hideBondHelp();
     setStatus("Requesting device…", "busy");
     // The firmware puts the 128-bit service UUID in the advertisement
     // (BT_DATA_UUID128_ALL in src/ble.c), so a service filter finds it.
@@ -377,20 +608,48 @@ async function connect() {
       filters: [{ services: [UUID_SERVICE] }],
     });
     device.addEventListener("gattserverdisconnected", onDisconnected);
+  } catch (e) {
+    // A cancelled chooser is not a failure worth a red line.
+    setStatus("Disconnected");
+    if (e && e.name === "NotFoundError") log("Device selection cancelled.");
+    else logErr("Device selection failed: " + e.message);
+    return;
+  }
+  await bringUpLink();
+}
 
+/* Reconnect the device already chosen. Used by the Retry button after an OS
+ * pairing, and safe to call repeatedly. */
+async function retryConnect() {
+  if (!device) {
+    log("No device selected yet — use Connect.");
+    return;
+  }
+  hideBondHelp();
+  await bringUpLink();
+}
+
+async function bringUpLink() {
+  try {
+    linkProbed = false;
     setStatus("Connecting…", "busy");
     server = await device.gatt.connect();
     const svc = await server.getPrimaryService(UUID_SERVICE);
 
+    /* Discovery is NOT permission-checked - all five resolve over an
+     * unencrypted link. Nothing is proven about security until a value is
+     * touched, which is what probeLinkSecurity() does next. */
     micChar      = await svc.getCharacteristic(UUID_MIC);
     spkChar      = await svc.getCharacteristic(UUID_SPK);
     ctlChar      = await svc.getCharacteristic(UUID_CTL);
     settingsChar = await svc.getCharacteristic(UUID_SETTINGS);
     stateChar    = await svc.getCharacteristic(UUID_STATE);
 
+    setStatus("Checking link security…", "busy");
+    await probeLinkSecurity();
+
     stateChar.addEventListener("characteristicvaluechanged", onStateNotify);
     await stateChar.startNotifications();
-    onStateNotify({ target: { value: await stateChar.readValue() } });
 
     micChar.addEventListener("characteristicvaluechanged", onMicNotify);
     await micChar.startNotifications();
@@ -407,14 +666,46 @@ async function connect() {
     setStatus("Disconnected", "err");
     logErr("Connect failed: " + e.message);
     showConnectedUI(false);
+    if (isSecurityError(e)) {
+      logWarn("The necklace refused the link for lack of encryption.");
+      showBondHelp();
+    } else {
+      /* Leave the link down rather than half-configured. A partially
+       * subscribed session looks connected and then behaves like a broken
+       * device, which is the harder thing to diagnose. */
+      if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+    }
   }
 }
 
 function onDisconnected() {
-  setStatus("Disconnected");
   showConnectedUI(false);
   releaseWakeLock();
-  logWarn("Link dropped.");
+
+  if (bondPending) {
+    /* Our own disconnect from showBondHelp(). The panel is already up and the
+     * status already says what is wanted; reporting a fault here would tell the
+     * operator the opposite of the truth at the exact moment they need to act
+     * on it. */
+    bondPending = false;
+    log("Link released — the device is now reachable for OS pairing.");
+    return;
+  }
+
+  setStatus("Disconnected");
+  if (!linkProbed) {
+    /* Dropped before a single value was read. On a stock image the overwhelming
+     * cause is the firmware giving up on us: it disconnects a link that has not
+     * reached its required security level within
+     * CONFIG_AI_BT_SECURITY_TIMEOUT_MS, because with one connection slot a
+     * squatting link stops the owner getting in. */
+    logWarn("Link dropped before it was usable — most likely the firmware "
+            + "security timeout, which fires when a link never gets encrypted.");
+    showBondHelp();
+  } else {
+    logWarn("Link dropped.");
+  }
+  linkProbed = false;
 }
 
 function disconnect() {
@@ -458,13 +749,21 @@ function onStateNotify(ev) {
     errNote.classList.add("hide");
   }
 
-  // bit0 remote audio, bit1 MIC subscribed
-  $("routeSw").checked = (st.flags & 0x01) !== 0;
+  const secure = (st.flags & DEV_FLAG_SECURE) !== 0;
+  const secEl = $("stSec");
+  /* Short words on purpose: the tile is ~88px wide and "encrypted" breaks
+   * mid-word at phone widths. The LINK label already supplies the noun. */
+  secEl.textContent = secure ? "secure" : "OPEN";
+  secEl.className = secure ? "good" : "bad";
+
+  // bit0 remote audio, bit1 MIC subscribed, bit2 encrypted
+  $("routeSw").checked = (st.flags & DEV_FLAG_REMOTE_AUDIO) !== 0;
 
   if (changed) {
     const bits = [];
-    if (st.flags & 0x01) bits.push("remote-audio");
-    if (st.flags & 0x02) bits.push("mic-subscribed");
+    if (st.flags & DEV_FLAG_REMOTE_AUDIO) bits.push("remote-audio");
+    if (st.flags & DEV_FLAG_MIC_SUBSCRIBED) bits.push("mic-subscribed");
+    bits.push(secure ? "encrypted" : "UNENCRYPTED");
     log(`STATE: ${name}${bits.length ? " [" + bits.join(", ") + "]" : ""} ack=${st.ack}` +
         (st.lastError ? "  ERROR=" + (DEVICE_ERRORS[st.lastError] ?? st.lastError) : ""));
   }
@@ -776,6 +1075,8 @@ async function applySettings() {
 
 $("connectBtn").onclick = () => { resetCapture(); connect(); };
 $("disconnectBtn").onclick = disconnect;
+$("retryBtn").onclick = () => { resetCapture(); retryConnect(); };
+$("osSettingsBtn").onclick = openOsBluetoothSettings;
 $("replayBtn").onclick = replay;
 $("clearLog").onclick = () => { $("log").innerHTML = ""; };
 $("applyBtn").onclick = applySettings;
