@@ -487,16 +487,32 @@ function isSecurityError(e) {
   return /not authorized|NotSupportedError|SecurityError|authentic|encrypt|insufficient/i.test(s);
 }
 
+/* The pairing steps go in with innerHTML so they can carry <b> markup, and one
+ * of them now interpolates a device name that came from the OS picker. Any
+ * peripheral in range can advertise whatever name it likes, so escape it. */
+function esc(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
 /* Per-platform pairing steps. A single static list would be wrong on two of the
  * three platforms this console gets used from, and a wrong instruction is worse
  * than none when the operator is already looking at a failure. */
 function bondSteps() {
   const ua = navigator.userAgent;
+  /* The name carries a per-unit suffix built from the identity address
+   * ("Aura-7F3A"), so there is no literal to print here. The picker has already
+   * run by the time this panel appears, which means device.name is the exact
+   * row the operator has to find in the OS list - naming the wrong one sends
+   * them past the necklace sitting right in front of them. */
+  const shown = (device && device.name) ? device.name : "Aura-…";
+  const NAME = "<b>" + esc(shown) + "</b>";
   if (/Windows/i.test(ua)) {
     return [
       'Open <b>Settings &rarr; Bluetooth &amp; devices</b> (the button below opens it directly).',
       'Choose <b>Add device &rarr; Bluetooth</b>.',
-      'Pick <b>AI Necklace</b> from the list. It has to be advertising — if it is asleep, double-tap it first.',
+      'Pick ' + NAME + ' from the list. It has to be advertising — if it is asleep, double-tap it first.',
       'Type the passkey above when Windows asks, then <b>Connect</b>.',
       'Come back here and press <b>Retry connection</b>.',
     ];
@@ -504,7 +520,7 @@ function bondSteps() {
   if (/Android/i.test(ua)) {
     return [
       'Open <b>Settings &rarr; Connected devices &rarr; Pair new device</b>.',
-      'Pick <b>AI Necklace</b>. Double-tap the necklace first if it is not listed — it stops advertising when asleep.',
+      'Pick ' + NAME + '. Double-tap the necklace first if it is not listed — it stops advertising when asleep.',
       'Enter the passkey above.',
       'Return to this tab and press <b>Retry connection</b>.',
       'If Android pairs and then immediately shows the device as disconnected, that is normal — it drops the link once bonded and this console will reconnect.',
@@ -513,13 +529,13 @@ function bondSteps() {
   if (/Mac OS X|CrOS/i.test(ua)) {
     return [
       'Open the system Bluetooth settings.',
-      'Pair with <b>AI Necklace</b>, entering the passkey above.',
+      'Pair with ' + NAME + ', entering the passkey above.',
       'Return here and press <b>Retry connection</b>.',
       'macOS hides some LE peripherals from its Bluetooth pane. If it never appears, use a Windows or Android host, or flash the open bench image.',
     ];
   }
   return [
-    'Pair <b>AI Necklace</b> from the system Bluetooth settings, using the passkey above.',
+    'Pair ' + NAME + ' from the system Bluetooth settings, using the passkey above.',
     'Return here and press <b>Retry connection</b>.',
   ];
 }
