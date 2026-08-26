@@ -392,8 +392,46 @@ let FRAMES_PER_WRITE = 12;
  * 1500-frame stream.
  */
 const DEVICE_BUFFER_FRAMES = 112;
-const LEAD_CAP_FRAMES = 64;        // 640 ms in flight, 48 frames of margin
+const LEAD_CAP_FRAMES = 48;        // 480 ms in flight, inside the 80-frame queue
 const START_THRESHOLD_FRAMES = 24;
+
+/* The device does not start CONSUMING when the first frame arrives, and the gap
+ * is the whole bug.
+ *
+ * Several things have to happen on the necklace before a single sample is
+ * played: the state machine transitions WAITING_RESPONSE -> PLAYBACK, the audio
+ * path starts, and src/audio.c then primes PLAYBACK_PRIME_BLOCKS (32 blocks =
+ * 320 ms) into the I2S driver before starting the peripheral at all. Until that
+ * completes the device is purely accumulating.
+ *
+ * The occupancy estimate below clocked `consumed` from the first WRITE, so it
+ * credited the device with draining throughout that window. The error is a
+ * fixed offset that persists for the entire response, and once it exceeds the
+ * slack between the cap and the queue the firmware starts discarding.
+ *
+ * Measured on board DD:FC:F1:FB:DE:24, 2026-08-25 - EVERY downlink playback:
+ *   "SPK frame dropped: q=80/80 slab=11 i2s=1 t=476ms"
+ * i.e. the 80-frame playback queue completely full with the I2S already
+ * running. Sessions dropped 3-11 frames each and then recovered, which is the
+ * signature of a fixed head-start rather than a sustained rate error.
+ *
+ * Simulated against a model of the firmware path (producer -> playback_q(80) ->
+ * feed thread -> driver queue(32), feed blocking when the driver is full):
+ * cap=64 with no discount is clean at 320 ms of start-up lag and saturates the
+ * queue at 500 ms, reproducing the hardware exactly. So 320 ms of prime alone
+ * does not account for it - the transition and audio start-up carry the rest,
+ * which is why the discount is paired with a lower cap rather than tuned to the
+ * prime on its own. cap=48 with a 32-frame discount stays clear of the queue out
+ * to 800 ms of lag (peak occupancy 64), which is the margin worth having since
+ * the true lag is not directly observable from here.
+ *
+ * The stubbed-writer test that blessed the old constants could not see any of
+ * this: the stub consumed from the first frame, so it modelled a device that
+ * starts instantly. A harness that omits the very mechanism under test measures
+ * nothing - the same lesson as judging the microphone through this product's
+ * own speaker.
+ */
+const DEVICE_PRIME_FRAMES = 32;
 
 /* ===================== state ===================== */
 
@@ -944,7 +982,12 @@ class SpeakerStream {
         // accumulate error the way per-iteration sleeps do, and it self-corrects
         // if a write stalls.
         if (start !== null) {
-          const consumed = (performance.now() - start) / FRAME_MS;
+          // Consumption begins only once the device has primed, so discount that
+          // many frames' worth of elapsed time before believing it drained
+          // anything. Clamped at 0 so the early part of a response, when nothing
+          // is being consumed, is modelled as exactly that.
+          const elapsed = (performance.now() - start) / FRAME_MS;
+          const consumed = Math.max(0, elapsed - DEVICE_PRIME_FRAMES);
           const lead = sent - consumed;
           if (lead > peakLead) peakLead = lead;
           const over = lead + n - LEAD_CAP_FRAMES;
